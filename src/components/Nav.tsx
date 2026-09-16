@@ -149,13 +149,18 @@ export function MobileTabs() {
         )
       })}
       <MoreTab active={moreActive} />
-      <button class="tab tab--compose" onClick={() => openCompose()}>
-        <span class="tab__fab">
-          <Icon name="pencil" size={22} />
-        </span>
-        <span>Post</span>
-      </button>
     </nav>
+  )
+}
+
+/** Floating compose button (mobile only): sits above the tab bar, right side. */
+export function MobileFab() {
+  const sess = activeSession.value
+  if (!sess) return null
+  return (
+    <button class="mobile-fab" aria-label="New post" onClick={() => openCompose()}>
+      <Icon name="pencil" size={24} />
+    </button>
   )
 }
 

@@ -172,16 +172,38 @@
 
 .tab[aria-current='page'] { color: var(--accent); }
 
-.tab__fab {
+/* Floating compose button (mobile): above the tab bar, right side.
+   Lifts clear of the 56px tab bar + safe-area inset. */
+.mobile-fab {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right, 0px));
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: var(--z-nav);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 30px;
-  border-radius: 10px;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
   background: var(--accent);
   color: var(--on-accent);
   box-shadow: var(--shadow-pop);
+  cursor: pointer;
+}
+
+.mobile-fab:active {
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mobile-fab {
+    transition: transform var(--dur-fast, 120ms) var(--ease-out, ease-out);
+  }
+}
+
+@media (min-width: 920px) {
+  .mobile-fab { display: none; }
 }
 
 /* More tab + bottom sheet (mobile) */

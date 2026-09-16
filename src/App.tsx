@@ -2,7 +2,7 @@ import { useEffect } from 'preact/hooks'
 import { activeSession, activeId } from './state/auth'
 import { route, startRouter, navigate } from './router'
 import { StartView, consumeOAuthReturn } from './views/Start'
-import { NavRail, MobileTabs } from './components/Nav'
+import { NavRail, MobileTabs, MobileFab } from './components/Nav'
 import { AppRoutes } from './views/registry'
 import { ComposeHost } from './views/Compose'
 import { ToastHost } from './components/ToastHost'
@@ -67,6 +67,7 @@ export function App() {
         <AppRoutes route={route.value} />
       </main>
       <MobileTabs />
+      <MobileFab />
       <ComposeHost />
       <ToastHost />
       <ShortcutsHost />

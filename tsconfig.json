@@ -11,7 +11,8 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "resolveJsonModule": true
   },
   "include": ["src", "vite.config.ts"]
 }

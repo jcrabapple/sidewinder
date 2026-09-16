@@ -8,7 +8,7 @@ import { composeOpen, composeContext, closeCompose } from '../state/compose'
 import { api } from '../state/auth'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
-import { customEmojis, emojisStatus, ensureEmojis, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
+import { customEmojis, emojisStatus, ensureEmojis, loadEmojiSet, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
 import type { Instance, MediaAttachment, Status } from '../api/types'
 import { Icon } from '../components/Icon'
 import './Compose.css'
@@ -156,6 +156,7 @@ export function ComposeHost() {
     )
     void fetchLimits().then(setLimits)
     void ensureEmojis()
+    void loadEmojiSet()
     requestAnimationFrame(() => {
       const ta = textRef.current
       if (ta) {

@@ -167,6 +167,12 @@
   gap: var(--sp-2);
 }
 
+.compose__emoji-scroll section {
+  /* ~1900 emoji buttons: skip layout/render for offscreen categories. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 260px;
+}
+
 .compose__emoji-scroll {
   max-height: 220px;
   overflow-y: auto;

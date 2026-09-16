@@ -15,6 +15,11 @@
   resize: vertical;
 }
 
+/* Touch devices: no resize grip. */
+@media (pointer: coarse) {
+  .compose__text { resize: none; }
+}
+
 .compose__meta {
   display: flex;
   justify-content: flex-end;
@@ -154,6 +159,23 @@
 
 .compose__submit {
   margin-left: auto;
+}
+
+/* Phones: stack the compose footer — toolbar row, visibility row, full-width Post. */
+@media (max-width: 480px) {
+  .compose__visibility {
+    flex-basis: 100%;
+    margin-left: 0;
+    margin-top: var(--sp-2);
+  }
+
+  .compose__submit {
+    flex: 1;
+    margin-left: 0;
+    margin-top: var(--sp-2);
+  }
+
+  .compose__text { resize: none; }
 }
 
 /* Emoji picker */

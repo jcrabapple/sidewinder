@@ -128,6 +128,37 @@ dialog.sw-dialog::backdrop {
   overflow-y: auto;
 }
 
+/* Phones: dock the composer to the bottom edge as a sheet (thumb reach,
+ * keyboard-friendly), keep it clear of the home indicator. */
+@media (max-width: 640px) {
+  dialog.sw-dialog.compose,
+  dialog.sw-dialog {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: var(--radius-l) var(--radius-l) 0 0;
+  }
+}
+
+/* Toasts sit above the mobile tab bar, not on top of it. */
+@media (max-width: 919px) {
+  .toast-region {
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* iOS zooms into any focused control smaller than 16px. */
+@media (pointer: coarse) {
+  .input, .textarea, .select {
+    font-size: max(16px, 1em);
+  }
+}
+
 /* Menus (inline popovers) */
 .menu {
   position: absolute;

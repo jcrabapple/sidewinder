@@ -78,6 +78,9 @@
 }
 
 .catchup__toplink-title {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   color: var(--fg);
   font-weight: 600;
   font-size: var(--fs-s);

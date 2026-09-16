@@ -42,8 +42,8 @@ export function SearchView() {
     return () => clearTimeout(t)
   }, [query])
 
-  useEffect(() => {
-    if (!submitted) return
+  const [retrySeq, setRetrySeq] = useState(0)
+  function runSearch() {
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
@@ -57,11 +57,14 @@ export function SearchView() {
         setResults(res)
         // Land on the first non-empty tab: GTS status search only covers
         // your own/interacted posts, so Posts is often legitimately 0 while
-        // People/Hashtags have plenty.
-        if (res.statuses.length === 0) {
-          if (res.accounts.length > 0) setTab('accounts')
-          else if (res.hashtags.length > 0) setTab('hashtags')
-        }
+        // People/Hashtags have plenty. Functional update so we never yank
+        // the user off the Seen tab if the server answer arrives late.
+        setTab((current) => {
+          if (current !== 'statuses' || res.statuses.length > 0) return current
+          if (res.accounts.length > 0) return 'accounts'
+          if (res.hashtags.length > 0) return 'hashtags'
+          return current
+        })
         setState('ready')
       })
       .catch((e: unknown) => {
@@ -74,7 +77,12 @@ export function SearchView() {
         )
         setState('error')
       })
-  }, [submitted])
+  }
+  useEffect(() => {
+    if (!submitted) return
+    runSearch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitted, retrySeq])
 
   // The Seen tab searches the local cache lazily: only when activated.
   const seenSeq = useRef(0)
@@ -139,7 +147,7 @@ export function SearchView() {
         <div class="state-block" role="alert">
           <h2>Search failed</h2>
           <p>{error ?? 'The search could not be completed.'}</p>
-          <button class="btn" onClick={() => setSubmitted((q) => q)}>Try again</button>
+          <button class="btn" onClick={() => setRetrySeq((c) => c + 1)}>Try again</button>
         </div>
       )}
 

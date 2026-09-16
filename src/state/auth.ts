@@ -63,6 +63,7 @@ export function switchAccount(id: string) {
   activeId.value = id
   persist(sessions.value)
   void closeStreams()
+  void import('./relationships').then((m) => m.clearRelationships()).catch(() => {})
 }
 
 export function removeSession(id: string) {
@@ -83,6 +84,7 @@ export async function fetchAccount(base: string, token: string): Promise<Account
 
 export function logout(id?: string) {
   void closeStreams()
+  void import('./relationships').then((m) => m.clearRelationships()).catch(() => {})
   removeSession(id ?? activeId.value ?? '')
 }
 

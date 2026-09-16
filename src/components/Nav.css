@@ -235,10 +235,14 @@
   text-decoration: none;
 }
 
-.more-sheet__row:hover,
+.more-sheet__row:hover {
+  background: var(--bg-raised);
+}
+
 .more-sheet__row:focus-visible {
-  background: var(--muted);
-  outline: none;
+  background: var(--bg-raised);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .more-sheet__row[aria-current='page'] {
@@ -248,5 +252,5 @@
 
 .more-sheet__row svg:last-child {
   margin-left: auto;
-  color: var(--muted-foreground);
+  color: var(--fg-muted);
 }

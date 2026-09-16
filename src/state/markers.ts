@@ -71,30 +71,36 @@ export function syncMarkersFromServer(): Promise<void> {
       adopt(session, client, 'notifications', markers.notifications)
     } catch (e) {
       console.debug('markers: sync failed', e)
+    } finally {
+      // Allow later callers to re-sync (retry after a transient failure)
+      // instead of caching a resolved promise for the app's lifetime.
+      if (syncedSession === session) syncPromise = null
     }
   })()
   return syncPromise
 }
 
-// Trailing debounce, 3s per timeline; only the highest queued id is sent.
+// Trailing debounce, 3s per SESSION+timeline; only the highest queued id is
+// sent. Keyed by session so two accounts' pending pushes never collide.
 const DEBOUNCE_MS = 3000
-const pending = new Map<MarkerTimeline, { id: string; session: string; timer: ReturnType<typeof setTimeout> }>()
+const pending = new Map<string, { id: string; session: string; timer: ReturnType<typeof setTimeout> }>()
 
 export function queueMarkerPush(timeline: MarkerTimeline, lastReadId: string): void {
   const session = sessionId()
   if (!session) return
-  const cur = pending.get(timeline)
+  const key = `${session}:${timeline}`
+  const cur = pending.get(key)
   if (cur && lastReadId <= cur.id) return
   if (cur) clearTimeout(cur.timer)
   const timer = setTimeout(() => {
-    pending.delete(timeline)
+    pending.delete(key)
     // The queued id belongs to the session that queued it: if the user
     // switched accounts during the debounce window, drop it — pushing it
     // would write account A's marker into account B.
     if (sessionId() !== session) return
     void pushMarker(session, timeline, lastReadId)
   }, DEBOUNCE_MS)
-  pending.set(timeline, { id: lastReadId, session, timer })
+  pending.set(key, { id: lastReadId, session, timer })
 }
 
 async function pushMarker(session: string, timeline: MarkerTimeline, lastReadId: string): Promise<void> {

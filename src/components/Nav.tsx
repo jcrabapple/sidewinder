@@ -3,7 +3,7 @@
  * All targets ≥44px, current location marked for screen readers via
  * aria-current="page".
  */
-import { useRef } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 import { route, navigate } from '../router'
 import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
@@ -166,21 +166,27 @@ export function MobileFab() {
 
 function MoreTab({ active }: { active: boolean }) {
   const ref = useRef<HTMLDialogElement>(null)
+  const [isOpen, setIsOpen] = useState(false)
   const segments = route.value.segments
   const frItem = ITEMS.find((i) => i.href === '/follow_requests')
   const frDot = (frItem?.attention === true && followRequestCount.value > 0) ?? false
 
   function close() {
+    setIsOpen(false)
     ref.current?.close()
   }
 
   return (
     <>
       <button
-        class="tab tab--more"
+        class={`tab tab--more${active ? ' tab--active' : ''}`}
         aria-haspopup="dialog"
-        aria-expanded={ref.current?.open ?? false}
-        onClick={() => ref.current?.showModal()}
+        aria-expanded={isOpen}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => {
+          setIsOpen(true)
+          ref.current?.showModal()
+        }}
       >
         <span class="nav-link__icon">
           <Icon name="more" size={24} />
@@ -188,7 +194,7 @@ function MoreTab({ active }: { active: boolean }) {
         </span>
         <span>More</span>
       </button>
-      <dialog class="sw-dialog more-sheet" ref={ref} aria-labelledby="more-sheet-title" onClick={(e) => { if (e.target === ref.current) close() }}>
+      <dialog class="sw-dialog more-sheet" ref={ref} aria-labelledby="more-sheet-title" onClose={() => setIsOpen(false)} onClick={(e) => { if (e.target === ref.current) close() }}>
         <div class="sw-dialog__head">
           <h2 id="more-sheet-title">More</h2>
           <button class="icon-btn" aria-label="Close" onClick={close}>

@@ -12,6 +12,13 @@ const cache = signal<Map<string, Relationship>>(new Map())
 /** Ids with an in-flight or completed fetch this session. */
 const fetched = new Set<string>()
 
+/** Wipe the cache — call on account switch/logout so Account B never sees
+ *  Account A's relationship data. */
+export function clearRelationships(): void {
+  cache.value = new Map()
+  fetched.clear()
+}
+
 export function relationshipFor(id: string): Relationship | null {
   return cache.value.get(id) ?? null
 }

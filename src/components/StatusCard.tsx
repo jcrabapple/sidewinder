@@ -150,8 +150,10 @@ export function replaceEmojis(text: string, emojis: Emoji[]): preact.ComponentCh
       )
       i = next + 1
     } else {
-      buf += text.slice(i, next === -1 ? text.length : next + 1)
-      i = next === -1 ? text.length : next + 1
+      // Advance past only the OPENING colon so an adjacent valid shortcode
+      // (e.g. ":unknown::wave:") keeps its leading colon.
+      buf += text.slice(i, colon + 1)
+      i = colon + 1
     }
   }
   if (buf) out.push(buf)

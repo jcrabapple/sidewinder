@@ -3,6 +3,7 @@
  * prepends from the user stream. Status-bearing notifications render a
  * compact StatusCard under the actor line.
  */
+import { Fragment } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { Notification, Status } from '../api/types'
 import { api } from '../state/auth'
@@ -389,7 +390,7 @@ function GroupedRow({
             const a = n.account
             const name = a ? a.display_name || a.username : 'Someone'
             return (
-              <>
+              <Fragment key={n.id}>
                 {i > 0 && (rest > 0 ? ', ' : ' and ')}
                 {a ? (
                   <a class="notifications__name" href={`#/accounts/${a.id}`}>
@@ -398,7 +399,7 @@ function GroupedRow({
                 ) : (
                   <span class="notifications__name">{name}</span>
                 )}
-              </>
+              </Fragment>
             )
           })}
           {rest > 0 && ` and ${rest} other${rest === 1 ? '' : 's'}`}{' '}

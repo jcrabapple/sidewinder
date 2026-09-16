@@ -265,5 +265,5 @@
 }
 
 .compose__policy-row > span:first-child {
-  font-size: var(--fs-sm);
+  font-size: var(--fs-s);
 }

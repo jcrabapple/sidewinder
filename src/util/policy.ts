@@ -15,9 +15,13 @@ import type { InteractionPolicy, PolicyRules, Status } from '../api/types'
 
 export type PolicyVerdict = 'allowed' | 'approval' | 'unknown' | 'denied'
 
+// 'me' in a served policy means THE VIEWER (per GTS swagger: "'me'
+// represents the user who made the request"), so it covers us. 'author'
+// means the post author: own-ness is already known via opts.own, so
+// 'author' never covers a third-party viewer and is NOT undecidable.
 const AUTO_COVERS_ME = ['me', 'public']
 const MANUAL_COVERS_ME = ['me', 'public']
-const UNDECIDABLE = ['followers', 'following', 'mutuals', 'mentioned', 'author']
+const UNDECIDABLE = ['followers', 'following', 'mutuals', 'mentioned']
 
 function evaluate(rules: PolicyRules | undefined, opts: { own: boolean; mentionedMe: boolean }): PolicyVerdict {
   if (!rules) return 'allowed'

@@ -93,15 +93,14 @@ export async function recordSeenPosts(statuses: Status[]): Promise<void> {
 }
 
 async function evict(db: IDBDatabase): Promise<void> {
-  const tx = db.transaction('seen', 'readwrite')
-  const store = tx.objectStore('seen')
-  const total = await new Promise<number>((resolve, reject) => {
-    const req = store.count()
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-  })
+  // Count via a separate (readonly) transaction FIRST: a readwrite
+  // transaction auto-commits once its request queue drains, so awaiting a
+  // promise mid-transaction before opening the cursor is unsafe.
+  const total = await seenPostsCount()
   const excess = total - MAX_POSTS
   if (excess <= 0) return
+  const tx = db.transaction('seen', 'readwrite')
+  const store = tx.objectStore('seen')
   // Primary keys are ULIDs: ascending cursor = oldest first.
   await new Promise<void>((resolve, reject) => {
     let left = excess

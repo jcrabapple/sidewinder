@@ -205,9 +205,14 @@ export function CatchUpView() {
     const byUrl = new Map<string, LinkAgg>()
     for (const e of entries) {
       const card = e.status.card
-      // No image requirement: the section never renders previews, and
-      // image-less cards are the majority of real links.
       if (!card || card.type !== 'link') continue
+      // Only web schemes: card.url is server JSON, not DOMPurify'd.
+      try {
+        const parsed = new URL(card.url)
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+      } catch {
+        continue
+      }
       const key = normalizeUrl(card.url)
       let agg = byUrl.get(key)
       if (!agg) {

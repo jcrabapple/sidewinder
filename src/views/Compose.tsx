@@ -295,11 +295,17 @@ export function ComposeHost() {
     if (replyTo) body.in_reply_to_id = replyTo.id
     if (media.length) body.media_ids = media.map((d) => d.attachment.id)
     if (!editing && (replyPolicy !== 'default' || boostPolicy !== 'default' || favPolicy !== 'default')) {
+      // If ANY policy is set, GTS normalizes unspecified sub-policies to
+      // restrictive. Preserve intent by explicitly sending public for the
+      // untouched types.
       const ip: Record<string, unknown> = {}
-      const r = rulesFor(replyPolicy); if (r) ip.can_reply = r
-      const b = rulesFor(boostPolicy); if (b) ip.can_reblog = b
-      const f = rulesFor(favPolicy); if (f) ip.can_favourite = f
-      if (Object.keys(ip).length > 0) body.interaction_policy = ip
+      const r = replyPolicy !== 'default' ? rulesFor(replyPolicy) : { automatic_approval: ['public'], manual_approval: [] }
+      const b = boostPolicy !== 'default' ? rulesFor(boostPolicy) : { automatic_approval: ['public'], manual_approval: [] }
+      const f = favPolicy !== 'default' ? rulesFor(favPolicy) : { automatic_approval: ['public'], manual_approval: [] }
+      if (r) ip.can_reply = r
+      if (b) ip.can_reblog = b
+      if (f) ip.can_favourite = f
+      body.interaction_policy = ip
     }
     if (pollOn && !editing) {
       body.poll = {

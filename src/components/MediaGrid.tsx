@@ -2,7 +2,7 @@
  * MediaGrid: responsive grid for 1–6 attachments, sensitive blur, alt badge,
  * video/audio playback, and a lightbox for full-size viewing.
  */
-import { useState } from 'preact/hooks'
+import { useState, useRef, useEffect } from 'preact/hooks'
 import type { MediaAttachment } from '../api/types'
 import { settings } from '../state/settings'
 import { Icon } from './Icon'
@@ -17,14 +17,16 @@ interface MediaGridProps {
 
 export function MediaGrid({ media, sensitive, revealed }: MediaGridProps) {
   const [lightbox, setLightbox] = useState<MediaAttachment | null>(null)
-  const [blurred, setBlurred] = useState(sensitive && !revealed)
+  const [dismissed, setDismissed] = useState(false)
+  // Derived, not stored: when the CW is revealed the blur clears too.
+  const blurred = sensitive && !revealed && !dismissed
   const n = Math.min(media.length, 6)
   const cls = `media-grid media-grid--${n}`
 
   return (
     <div class={cls}>
       {blurred && (
-        <button class="media-grid__sensitive" onClick={() => setBlurred(false)}>
+        <button class="media-grid__sensitive" onClick={() => setDismissed(true)}>
           <Icon name="eye-off" size={20} />
           <span>Sensitive media — click to view</span>
         </button>
@@ -78,21 +80,31 @@ function MediaTile({ media, onOpen }: { media: MediaAttachment; onOpen: () => vo
 }
 
 function Lightbox({ media, onClose }: { media: MediaAttachment; onClose: () => void }) {
+  const dlg = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    dlg.current?.showModal()
+  }, [])
   return (
-    <div class="lightbox" role="dialog" aria-modal="true" aria-label="Media viewer" onClick={onClose}>
-      <div class="lightbox__inner" onClick={(e) => e.stopPropagation()}>
+    <dialog
+      ref={dlg}
+      class="lightbox"
+      aria-label="Media viewer"
+      onClick={(e) => { if (e.target === dlg.current) onClose() }}
+      onClose={onClose}
+    >
+      <div class="lightbox__inner">
         <div class="lightbox__bar">
           {media.description ? (
             <p class="lightbox__alt">{media.description}</p>
           ) : (
             <p class="lightbox__alt lightbox__alt--none">No description provided</p>
           )}
-          <button class="icon-btn lightbox__close" onClick={onClose} aria-label="Close viewer">
+          <button class="icon-btn lightbox__close" onClick={onClose} aria-label="Close viewer" title="Close viewer">
             <Icon name="x" size={20} />
           </button>
         </div>
         <img src={media.url ?? media.preview_url ?? ''} alt={media.description ?? ''} />
       </div>
-    </div>
+    </dialog>
   )
 }

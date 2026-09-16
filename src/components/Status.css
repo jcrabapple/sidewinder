@@ -128,7 +128,7 @@
   font-weight: 600;
 }
 
-.status__cw-btn { align-self: flex-start; min-height: 36px; }
+.status__cw-btn { align-self: flex-start; min-height: 44px; }
 
 .status--thread {
   border-bottom: none;

@@ -7,6 +7,7 @@ import { AppRoutes } from './views/registry'
 import { ComposeHost } from './views/Compose'
 import { ToastHost } from './components/ToastHost'
 import { openCompose } from './state/compose'
+import { toast } from './state/toast'
 import { refreshFollowRequestCount } from './state/notifications'
 import { ShortcutsHost } from './components/Shortcuts'
 import './shell.css'
@@ -15,7 +16,10 @@ startRouter()
 
 // An OAuth redirect lands on the SPA origin with ?code=&state= — consume it
 // before routing; without a session this goes to the login view regardless.
-consumeOAuthReturn().catch((e) => console.error('OAuth return failed', e))
+consumeOAuthReturn().catch((e) => {
+  console.error('OAuth return failed', e)
+  toast(e instanceof Error ? e.message : 'Signing in failed. Start again from the login page.', 'error')
+})
 
 export function App() {
   // Global must-haves: 'n' opens compose, '/' jumps to search.
@@ -38,7 +42,13 @@ export function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  if (!activeSession.value) return <StartView />
+  if (!activeSession.value)
+    return (
+      <>
+        <StartView />
+        <ToastHost />
+      </>
+    )
 
   return (
     <div class="shell">

@@ -12,6 +12,7 @@ import { api, activeSession } from '../state/auth'
 import { settings } from '../state/settings'
 import { openCompose } from '../state/compose'
 import { navigate } from '../router'
+import { toast } from '../state/toast'
 import { toggleFav, toggleBoost, toggleBookmark, deleteStatus } from '../state/statusActions'
 import { Icon } from '../components/Icon'
 import { MediaGrid } from './MediaGrid'
@@ -211,7 +212,7 @@ function handleContentClick(e: MouseEvent) {
   } else if (a.classList.contains('hashtag')) {
     e.preventDefault()
     const tag = decodeURIComponent(href.replace(/.*\/tags?\//, '')).replace(/[/?].*$/, '')
-    if (tag) navigate(`/tags/${tag}`)
+    if (tag) navigate(`/tags/${encodeURIComponent(tag)}`)
   }
 }
 
@@ -242,6 +243,7 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
       <button
         class="icon-btn action"
         aria-label={`Reply, ${formatCount(status.replies_count)} replies`}
+        title="Reply"
         onClick={() => openCompose({ replyTo: status })}
       >
         <Icon name="reply" size={18} />
@@ -251,9 +253,9 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         class="icon-btn action action--boost"
         aria-pressed={status.reblogged}
         aria-label={status.reblogged ? 'Undo boost' : 'Boost'}
+        title={status.reblogged ? 'Undo boost' : 'Boost'}
         disabled={!canBoost}
-        title={canBoost ? undefined : 'This post cannot be boosted'}
-        onClick={() => toggleBoost(status, onUpdated)}
+        onClick={() => toggleBoost(status, onUpdated).catch(() => {})}
       >
         <Icon name="repeat" size={18} />
         {status.reblogs_count > 0 && <span class="action__count num">{formatCount(status.reblogs_count)}</span>}
@@ -262,7 +264,8 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         class="icon-btn action action--fav"
         aria-pressed={status.favourited}
         aria-label={status.favourited ? 'Unlike' : 'Favourite'}
-        onClick={() => toggleFav(status, onUpdated)}
+        title={status.favourited ? 'Unlike' : 'Favourite'}
+        onClick={() => toggleFav(status, onUpdated).catch(() => {})}
       >
         <Icon name="heart" size={18} />
         {status.favourites_count > 0 && <span class="action__count num">{formatCount(status.favourites_count)}</span>}
@@ -271,7 +274,8 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         class="icon-btn action action--bookmark"
         aria-pressed={status.bookmarked}
         aria-label={status.bookmarked ? 'Remove bookmark' : 'Bookmark'}
-        onClick={() => toggleBookmark(status, onUpdated)}
+        title={status.bookmarked ? 'Remove bookmark' : 'Bookmark'}
+        onClick={() => toggleBookmark(status, onUpdated).catch(() => {})}
       >
         <Icon name="bookmark" size={18} />
       </button>
@@ -288,7 +292,10 @@ function MoreMenu({ status, own, onUpdated, onDeleted }: { status: Status; own: 
     if (!btn) return
     const act = btn.dataset.act
     if (act === 'copy') {
-      navigator.clipboard.writeText(status.url ?? status.uri).then(() => close())
+      navigator.clipboard.writeText(status.url ?? status.uri).then(() => close()).catch(() => {
+        close()
+        toast('Could not copy the link to the clipboard.', 'error')
+      })
     } else if (act === 'original') {
       window.open(status.url ?? status.uri, '_blank', 'noopener')
       close()
@@ -297,7 +304,7 @@ function MoreMenu({ status, own, onUpdated, onDeleted }: { status: Status; own: 
       openCompose({ editing: status })
     } else if (act === 'delete') {
       close()
-      deleteStatus(status, () => onDeleted?.(status.id))
+      deleteStatus(status, () => onDeleted?.(status.id)).catch(() => {})
     }
   }
 

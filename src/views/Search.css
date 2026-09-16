@@ -34,7 +34,7 @@
 /* Hide the native clear control; we render our own. */
 .search__input::-webkit-search-cancel-button { appearance: none; }
 
-.search__clear { width: 36px; height: 36px; }
+.search__clear { width: 44px; height: 44px; }
 
 .search__tabs {
   display: flex;

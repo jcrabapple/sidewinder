@@ -65,7 +65,7 @@ export function StartView() {
             <input
               id="server"
               class="input"
-              type="url"
+              type="text"
               inputMode="url"
               autoComplete="url"
               spellcheck={false}

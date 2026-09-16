@@ -2,7 +2,8 @@
  * Hash router. Routes live in location.hash as "#/path?query".
  * Hash routing keeps the static host dumb: any file server works, no rewrites.
  */
-import { signal, effect } from '@preact/signals'
+import { signal } from '@preact/signals'
+import { useEffect } from 'preact/hooks'
 
 export interface Route {
   /** Path segments without the leading '#'. Empty array = home. */
@@ -44,7 +45,7 @@ export function navigate(path: string, { replace = false } = {}) {
 
 /** Keep the document title in sync with the active view. */
 export function useTitle(title: string) {
-  effect(() => {
+  useEffect(() => {
     document.title = title ? `${title} · Sidewinder` : 'Sidewinder'
-  })
+  }, [title])
 }

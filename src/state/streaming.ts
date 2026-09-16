@@ -27,8 +27,11 @@ function streamQuery(stream: StreamName): string {
 }
 
 function wssUrl(stream: StreamName, token: string): string {
-  const base = new URL(activeSession.value!.base)
-  const ws = new URL(`wss://${base.host}/api/v1/streaming`)
+  const sess = activeSession.value
+  if (!sess) throw new Error('Cannot stream without a session')
+  const base = new URL(sess.base)
+  const scheme = base.protocol === 'https:' ? 'wss:' : 'ws:'
+  const ws = new URL(`${scheme}//${base.host}/api/v1/streaming`)
   ws.searchParams.set('access_token', token)
   // GTS takes stream (and tag/list) as query params; the 'stream=' value can
   // carry '&tag=x' style suffixes per Mastodon's URL scheme.

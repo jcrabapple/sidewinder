@@ -12,7 +12,7 @@
   align-items: center;
   gap: var(--sp-2);
   margin: var(--sp-2) auto;
-  min-height: 36px;
+  min-height: 44px;
   padding: var(--sp-1) var(--sp-4);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-m);

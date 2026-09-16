@@ -21,10 +21,14 @@ export function ListMembersDialog({ list, onClose }: { list: List; onClose: () =
   useEffect(() => {
     const dlg = ref.current
     if (!dlg) return
+    const prevFocus = document.activeElement as HTMLElement | null
     dlg.showModal()
     const onCancel = () => onClose()
     dlg.addEventListener('cancel', onCancel)
-    return () => dlg.removeEventListener('cancel', onCancel)
+    return () => {
+      dlg.removeEventListener('cancel', onCancel)
+      prevFocus?.focus()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -123,6 +127,10 @@ export function ListMembersDialog({ list, onClose }: { list: List; onClose: () =
         <p class="help-text" id="list-member-search-help">
           {searching ? 'Searching…' : 'Type at least two characters to search.'}
         </p>
+
+        {results.length === 0 && !searching && query.trim().length >= 2 && (
+          <p class="help-text" role="status">No accounts matched that search.</p>
+        )}
 
         {results.length > 0 && (
           <ul class="lists__search-results">

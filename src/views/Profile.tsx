@@ -61,7 +61,7 @@ export function ProfileView({ id }: { id: string }) {
   }
 
   async function loadStatuses(reset: boolean, activeTab: Tab) {
-    const seq = requestSeq.current
+    const seq = ++requestSeq.current
     if (reset) {
       setListState('loading')
       setStatuses([])
@@ -332,8 +332,8 @@ function EditProfileDialog({ account, onClose, onSaved }: EditDialogProps) {
 
   useEffect(() => {
     const dlg = dialogRef.current
-    if (dlg && !dlg.open) dlg.showModal()
     const prev = document.activeElement
+    if (dlg && !dlg.open) dlg.showModal()
     return () => { if (prev instanceof HTMLElement) prev.focus() }
   }, [])
 
@@ -386,7 +386,7 @@ function EditProfileDialog({ account, onClose, onSaved }: EditDialogProps) {
       <form onSubmit={save}>
         <div class="sw-dialog__head">
           <h2 id="edit-profile-title">Edit profile</h2>
-          <button type="button" class="icon-btn" aria-label="Close" onClick={close} style="margin-left:auto">
+          <button type="button" class="icon-btn" aria-label="Close" title="Close" onClick={close} style="margin-left:auto">
             <Icon name="x" size={18} />
           </button>
         </div>
@@ -439,6 +439,7 @@ function EditProfileDialog({ account, onClose, onSaved }: EditDialogProps) {
                 type="button"
                 class="icon-btn"
                 aria-label={`Remove field ${f.name || i + 1}`}
+                title={`Remove field ${f.name || i + 1}`}
                 onClick={() => setFields((cur) => cur.filter((_, idx) => idx !== i))}
               >
                 <Icon name="trash" size={16} />

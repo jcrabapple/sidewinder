@@ -40,7 +40,7 @@
   transition: transform var(--dur-med) var(--ease-out);
 }
 
-.poll__row--lead .poll__track::before { background: oklch(0.78 0.145 155 / 0.28); }
+.poll__row--lead .poll__track::before { background: color-mix(in oklab, var(--accent) 28%, transparent); }
 
 .poll__label, .poll__pct {
   position: relative;

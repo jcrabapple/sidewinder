@@ -158,12 +158,16 @@ function ListEditDialog({
   useEffect(() => {
     const dlg = ref.current
     if (!dlg) return
+    const prevFocus = document.activeElement as HTMLElement | null
     dlg.showModal()
     const input = dlg.querySelector('input')
     input?.focus()
     const onCancel = () => onClose()
     dlg.addEventListener('cancel', onCancel)
-    return () => dlg.removeEventListener('cancel', onCancel)
+    return () => {
+      dlg.removeEventListener('cancel', onCancel)
+      prevFocus?.focus()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -4,8 +4,8 @@
   place-items: center;
   padding: var(--sp-5);
   background:
-    radial-gradient(1200px 600px at 85% -10%, oklch(0.35 0.05 155 / 0.35), transparent 65%),
-    radial-gradient(900px 500px at 0% 110%, oklch(0.3 0.04 155 / 0.3), transparent 60%),
+    radial-gradient(1200px 600px at 85% -10%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 65%),
+    radial-gradient(900px 500px at 0% 110%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 60%),
     var(--bg);
 }
 

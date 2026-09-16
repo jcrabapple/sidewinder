@@ -51,12 +51,18 @@ export class Api {
 
   async request<T>(
     path: string,
-    opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null>; headers?: Record<string, string>; timeoutMs?: number } = {},
+    opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null | string[]>; headers?: Record<string, string>; timeoutMs?: number } = {},
   ): Promise<T> {
     const url = new URL(this.base + path)
     if (opts.query) {
       for (const [k, v] of Object.entries(opts.query)) {
-        if (v !== undefined && v !== null) url.searchParams.set(k, String(v))
+        if (v === undefined || v === null) continue
+        if (Array.isArray(v)) {
+          // Repeated params (id[]=a&id[]=b) — GoToSocial parses id[] as a slice.
+          for (const item of v) url.searchParams.append(k, String(item))
+        } else {
+          url.searchParams.set(k, String(v))
+        }
       }
     }
     const headers: Record<string, string> = { ...opts.headers }
@@ -128,13 +134,14 @@ export class Api {
     let nextMaxId: string | null = null
     const link = res.headers.get('Link') ?? res.headers.get('link')
     if (link) {
-      const m = link.match(/<[^>]*[?&]max_id=(\d+)[^>]*>;\s*rel="next"/)
+      // GoToSocial uses alphanumeric ULID ids, so capture any non-reserved chars.
+      const m = link.match(/<[^>]*[?&]max_id=([^&>]+)[^>]*>;\s*rel="next"/)
       if (m) nextMaxId = m[1]
     }
     return { items, nextMaxId }
   }
 
-  get<T>(path: string, query?: Record<string, string | number | boolean | undefined | null>): Promise<T> {
+  get<T>(path: string, query?: Record<string, string | number | boolean | undefined | null | string[]>): Promise<T> {
     return this.request<T>(path, { query })
   }
   post<T>(path: string, body?: unknown): Promise<T> {

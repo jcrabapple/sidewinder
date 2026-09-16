@@ -81,9 +81,10 @@ const EXPIRY_OPTIONS: [number, string][] = [
 
 /** Strip HTML tags as a fallback source text for edits. */
 function stripTags(html: string): string {
-  const div = document.createElement('div')
-  div.innerHTML = html
-  return div.textContent ?? ''
+  // <template> content is inert: no scripts, no resource loads.
+  const el = document.createElement('template')
+  el.innerHTML = html
+  return el.content.textContent ?? ''
 }
 
 export function ComposeHost() {
@@ -207,6 +208,7 @@ export function ComposeHost() {
           await new Promise((r) => setTimeout(r, 1500))
           att = await api.value.get<MediaAttachment>(`/api/v1/media/${att.id}`)
         }
+        if (!att.url) throw new Error('The server is still processing that file. Wait a moment and try again.')
         setMedia((m) => m.map((d) => (d.attachment.id === placeholder.attachment.id ? { attachment: att, uploading: false } : d)))
       } catch (e) {
         setMedia((m) => m.filter((d) => d.attachment.id !== placeholder.attachment.id))

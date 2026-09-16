@@ -73,7 +73,7 @@ export function Icon({ name, size = 20, ...rest }: { name: IconName | string; si
       {...rest}
     >
       {paths.map((d) => (
-        <path d={d} />
+        <path key={d} d={d} />
       ))}
     </svg>
   )

@@ -62,6 +62,7 @@ export function upsertSession(sess: Session) {
 export function switchAccount(id: string) {
   activeId.value = id
   persist(sessions.value)
+  void closeStreams()
 }
 
 export function removeSession(id: string) {
@@ -81,7 +82,18 @@ export async function fetchAccount(base: string, token: string): Promise<Account
 }
 
 export function logout(id?: string) {
+  void closeStreams()
   removeSession(id ?? activeId.value ?? '')
+}
+
+/** Tear down live streams; dynamic import avoids the auth↔streaming cycle. */
+async function closeStreams() {
+  try {
+    const { closeAllStreams } = await import('./streaming')
+    closeAllStreams()
+  } catch {
+    // Streams are best-effort cleanup.
+  }
 }
 
 /** Escape hatch for tests / debugging. */
@@ -89,4 +101,5 @@ export function resetSessions() {
   sessions.value = []
   activeId.value = null
   persist([])
+  void closeStreams()
 }

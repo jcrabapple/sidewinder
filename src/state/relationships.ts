@@ -29,7 +29,7 @@ export async function ensureRelationships(ids: string[]): Promise<void> {
   for (const id of missing) fetched.add(id)
   try {
     const rels = await api.value.get<Relationship[]>('/api/v1/accounts/relationships', {
-      'id[]': missing.join(','),
+      'id[]': missing,
     })
     merge(rels)
   } catch {

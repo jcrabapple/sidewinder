@@ -145,7 +145,7 @@ dialog.sw-dialog::backdrop {
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
-  min-height: 40px;
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-3);
   border: none;
   border-radius: var(--radius-s);

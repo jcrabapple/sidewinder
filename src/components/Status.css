@@ -104,7 +104,7 @@
   align-items: center;
   gap: var(--sp-2);
   margin: var(--sp-1) 0 0 calc(46px + var(--sp-3));
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-size: var(--fs-xs);
 }
 

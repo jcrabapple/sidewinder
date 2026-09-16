@@ -32,10 +32,12 @@
   content: '';
   position: absolute;
   inset: 0;
-  width: var(--pct, 0%);
+  width: 100%;
+  transform: scaleX(var(--fill, 0));
+  transform-origin: left center;
   background: var(--accent-muted);
   border-radius: inherit;
-  transition: width var(--dur-med) var(--ease-out);
+  transition: transform var(--dur-med) var(--ease-out);
 }
 
 .poll__row--lead .poll__track::before { background: oklch(0.78 0.145 155 / 0.28); }

@@ -60,7 +60,7 @@
   --surface-3: oklch(0.31 0.014 155);
   --fg: oklch(0.925 0.007 155);
   --fg-muted: oklch(0.71 0.012 155);
-  --fg-faint: oklch(0.56 0.012 155);
+  --fg-faint: oklch(0.62 0.012 155);
   --accent: oklch(0.78 0.145 155);
   --accent-strong: oklch(0.85 0.165 155);
   --accent-muted: oklch(0.78 0.145 155 / 0.16);
@@ -86,7 +86,7 @@
   --surface-3: oklch(0.90 0.010 155);
   --fg: oklch(0.25 0.015 155);
   --fg-muted: oklch(0.44 0.018 155);
-  --fg-faint: oklch(0.55 0.015 155);
+  --fg-faint: oklch(0.50 0.015 155);
   --accent: oklch(0.52 0.125 155);
   --accent-strong: oklch(0.45 0.13 155);
   --accent-muted: oklch(0.52 0.125 155 / 0.13);
@@ -272,7 +272,7 @@ body {
 .status-content blockquote {
   margin: 0 0 0.8em;
   padding: 0 var(--sp-4);
-  border-left: 2px solid var(--border-strong);
+  border-left: 1px solid var(--border-strong);
   color: var(--fg-muted);
 }
 .status-content code { font-family: var(--font-mono); font-size: 0.9em; background: var(--surface-2); border-radius: 4px; padding: 0.1em 0.35em; }

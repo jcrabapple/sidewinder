@@ -78,12 +78,9 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
           <span class="status__handle">@{status.account.acct}</span>
         </div>
         <div class="status__meta">
-          <span
-            class="status__visibility"
-            title={VISIBILITY_LABEL[status.visibility]?.label ?? status.visibility}
-            aria-label={VISIBILITY_LABEL[status.visibility]?.label ?? status.visibility}
-          >
+          <span class="status__visibility" title={VISIBILITY_LABEL[status.visibility]?.label ?? status.visibility}>
             <Icon name={VISIBILITY_LABEL[status.visibility]?.icon ?? 'globe'} size={14} />
+            <span class="visually-hidden">{VISIBILITY_LABEL[status.visibility]?.label ?? status.visibility}</span>
           </span>
           <a class="status__time" href={`#/statuses/${status.id}`} title={formatAbsolute(status.created_at)}>
             <time dateTime={status.created_at}>{formatCompact(status.created_at)}</time>

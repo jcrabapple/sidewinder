@@ -58,7 +58,7 @@ export function Poll({ poll, onPollUpdated }: PollProps) {
             <li key={i} class="poll__option">
               {poll.voted || poll.expired ? (
                 <div class={i === leading ? 'poll__row poll__row--lead' : 'poll__row'}>
-                  <div class="poll__track" style={`--pct:${pct}%`}>
+                  <div class="poll__track" style={`--fill:${pct / 100}`}>
                     <span class="poll__label">
                       {isOwnChoice && <span class="visually-hidden">Your choice: </span>}
                       {replaceEmojis(opt.title, poll.emojis)}

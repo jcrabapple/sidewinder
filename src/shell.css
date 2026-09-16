@@ -134,6 +134,7 @@ dialog.sw-dialog::backdrop {
   dialog.sw-dialog.compose,
   dialog.sw-dialog {
     position: fixed;
+    top: auto;
     left: 0;
     right: 0;
     bottom: 0;

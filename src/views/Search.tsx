@@ -143,18 +143,24 @@ export function SearchView() {
         </div>
       )}
 
-      {state === 'ready' && results && (
+      {/* Tabs render during loading too, so the Seen tab (local, instant)
+          stays reachable while the server query is slow. */}
+      {(state === 'ready' || state === 'loading') && (
         <>
           <div class="search__tabs" role="tablist" aria-label="Search result types">
-            <TabButton active={tab === 'statuses'} onClick={() => setTab('statuses')} count={counts.statuses}>Posts</TabButton>
-            <TabButton active={tab === 'accounts'} onClick={() => setTab('accounts')} count={counts.accounts}>People</TabButton>
-            <TabButton active={tab === 'hashtags'} onClick={() => setTab('hashtags')} count={counts.hashtags}>Hashtags</TabButton>
+            {state === 'ready' && results && (
+              <>
+                <TabButton active={tab === 'statuses'} onClick={() => setTab('statuses')} count={counts.statuses}>Posts</TabButton>
+                <TabButton active={tab === 'accounts'} onClick={() => setTab('accounts')} count={counts.accounts}>People</TabButton>
+                <TabButton active={tab === 'hashtags'} onClick={() => setTab('hashtags')} count={counts.hashtags}>Hashtags</TabButton>
+              </>
+            )}
             {settings.value.seenHistory && (
               <TabButton active={tab === 'seen'} onClick={() => setTab('seen')} count={seen?.length ?? 0}>Seen</TabButton>
             )}
           </div>
 
-          {tab === 'statuses' &&
+          {state === 'ready' && results && tab === 'statuses' &&
             (results.statuses.length === 0 ? (
               <NoResults label="posts" />
             ) : (
@@ -176,14 +182,14 @@ export function SearchView() {
               ))
             ))}
 
-          {tab === 'accounts' &&
+          {state === 'ready' && results && tab === 'accounts' &&
             (results.accounts.length === 0 ? (
               <NoResults label="people" />
             ) : (
               results.accounts.map((a) => <AccountRow key={a.id} account={a} />)
             ))}
 
-          {tab === 'hashtags' &&
+          {state === 'ready' && results && tab === 'hashtags' &&
             (results.hashtags.length === 0 ? (
               <NoResults label="hashtags" />
             ) : (

@@ -126,7 +126,7 @@ export function SettingsView() {
         {s.seenHistory && (
           <div class="settings__history-meta">
             <span class="help-text" role="status">
-              {seenCount === null ? 'Counting…' : `${seenCount.toLocaleString()} posts cached (about ${Math.max(1, Math.round((seenCount * 700) / 1e6))} MB)`}
+              {seenCount === null ? 'Counting…' : `${seenCount.toLocaleString()} posts cached (about ${seenCount === 0 ? 0 : Math.max(1, Math.round((seenCount * 700) / 1e6))} MB)`}
             </span>
             <button class="btn" onClick={() => void handleClearSeen()}>
               Clear history

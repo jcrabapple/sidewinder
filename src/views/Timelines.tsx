@@ -10,6 +10,7 @@ import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
 import { getSeenTop, raiseSeenTop, isNewer } from '../state/readState'
 import { queueMarkerPush } from '../state/markers'
+import { recordSeenPosts } from '../state/seenPosts'
 import { StatusCard } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
@@ -115,6 +116,7 @@ export function TimelinePage(props: TimelinePageProps) {
       if (page.items.length > 0) {
         const prev = raiseSeenTop(session, key, page.items[0].id)
         setVisitMark(prev)
+        void recordSeenPosts(page.items)
         // Push only when the mark actually ROSE (items[0] newer than prev).
         // `prev !== id` would also fire on a shrunk timeline (posts deleted
         // above the mark), regressing the server marker.
@@ -141,6 +143,7 @@ export function TimelinePage(props: TimelinePageProps) {
         return [...cur, ...page.items.filter((s) => !seen.has(s.id))]
       })
       setNextMaxId(page.nextMaxId)
+      void recordSeenPosts(page.items)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'More posts could not be loaded.')
     } finally {

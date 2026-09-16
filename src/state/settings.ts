@@ -15,6 +15,8 @@ export interface Settings {
   relativeTimes: boolean
   /** Default post visibility for new posts. */
   defaultVisibility: 'public' | 'unlisted' | 'private' | 'direct'
+  /** Keep a client-side searchable cache of posts seen in timelines. */
+  seenHistory: boolean
 }
 
 const KEY = 'sidewinder.settings'
@@ -26,6 +28,7 @@ const DEFAULTS: Settings = {
   autoplayGifs: false,
   relativeTimes: true,
   defaultVisibility: 'public',
+  seenHistory: false,
 }
 
 function load(): Settings {

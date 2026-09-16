@@ -3,6 +3,8 @@
  * account section (active account, sign out). Persists via state/settings.ts.
  */
 import { settings, updateSettings, type ThemePref, type Settings } from '../state/settings'
+import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
+import { useEffect, useState } from 'preact/hooks'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate } from '../router'
@@ -25,6 +27,21 @@ export function SettingsView() {
   useTitle('Settings')
   const s = settings.value
   const session = activeSession.value
+  const [seenCount, setSeenCount] = useState<number | null>(null)
+
+  // Refresh the cache size readout whenever the toggle flips on.
+  useEffect(() => {
+    if (!s.seenHistory) {
+      setSeenCount(null)
+      return
+    }
+    void seenPostsCount().then(setSeenCount)
+  }, [s.seenHistory])
+
+  async function handleClearSeen() {
+    await clearSeenPosts()
+    setSeenCount(0)
+  }
 
   return (
     <div class="settings">
@@ -96,6 +113,26 @@ export function SettingsView() {
           ))}
         </select>
         <p class="help-text">New posts start with this audience. You can change it per post.</p>
+      </section>
+
+      <section class="settings__section card" aria-labelledby="settings-history">
+        <h2 id="settings-history">Seen-post history</h2>
+        <Toggle
+          label="Keep a searchable history of seen posts"
+          help="Stores the text of posts that appear in your timelines (up to 10,000, oldest removed first) so you can search them from the Seen tab in Search. Stored only in this browser; the server never sees it."
+          checked={s.seenHistory}
+          onChange={(v) => updateSettings({ seenHistory: v })}
+        />
+        {s.seenHistory && (
+          <div class="settings__history-meta">
+            <span class="help-text" role="status">
+              {seenCount === null ? 'Counting…' : `${seenCount.toLocaleString()} posts cached (about ${Math.max(1, Math.round((seenCount * 700) / 1e6))} MB)`}
+            </span>
+            <button class="btn" onClick={() => void handleClearSeen()}>
+              Clear history
+            </button>
+          </div>
+        )}
       </section>
 
       {session && (

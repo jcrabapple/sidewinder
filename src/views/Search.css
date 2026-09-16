@@ -143,3 +143,81 @@
 
 .search__tag-name { font-weight: 600; }
 .search__tag > svg:last-child { margin-left: auto; color: var(--fg-faint); }
+
+/* Seen-post history rows (local IndexedDB results) */
+.search__seen-row {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 0.5rem;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.search__seen-row:hover,
+.search__seen-row:focus-visible {
+  background: var(--surface-hover, var(--muted));
+  outline: none;
+}
+
+.search__seen-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.search__seen-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.search__seen-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.search__seen-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search__seen-acct {
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search__seen-time {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+  flex-shrink: 0;
+}
+
+.search__seen-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 0.25rem;
+}
+
+.search__seen-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.85em;
+}
+
+.search__seen-stats svg + * {
+  margin-right: 0.6rem;
+}

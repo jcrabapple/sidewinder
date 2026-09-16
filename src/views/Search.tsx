@@ -9,9 +9,12 @@ import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { formatCount } from '../util/time'
 import { navigate, useTitle } from '../router'
+import { settings } from '../state/settings'
+import { searchSeenPosts, type SeenPost } from '../state/seenPosts'
+import { formatRelative, formatAbsolute } from '../util/time'
 import './Search.css'
 
-type Tab = 'statuses' | 'accounts' | 'hashtags'
+type Tab = 'statuses' | 'accounts' | 'hashtags' | 'seen'
 type LoadState = 'idle' | 'loading' | 'error' | 'ready'
 
 export function SearchView() {
@@ -19,6 +22,8 @@ export function SearchView() {
   const [query, setQuery] = useState('')
   const [submitted, setSubmitted] = useState('')
   const [tab, setTab] = useState<Tab>('statuses')
+  const [seen, setSeen] = useState<SeenPost[] | null>(null)
+  const [seenBusy, setSeenBusy] = useState(false)
   const [results, setResults] = useState<SearchResults | null>(null)
   const [state, setState] = useState<LoadState>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +75,22 @@ export function SearchView() {
         setState('error')
       })
   }, [submitted])
+
+  // The Seen tab searches the local cache lazily: only when activated.
+  const seenSeq = useRef(0)
+  useEffect(() => {
+    if (tab !== 'seen' || !submitted || !settings.value.seenHistory) return
+    const seq = ++seenSeq.current
+    setSeenBusy(true)
+    searchSeenPosts(submitted)
+      .then((matches) => {
+        if (seq !== seenSeq.current) return
+        setSeen(matches)
+      })
+      .finally(() => {
+        if (seq === seenSeq.current) setSeenBusy(false)
+      })
+  }, [tab, submitted])
 
   const counts = {
     statuses: results?.statuses.length ?? 0,
@@ -128,6 +149,9 @@ export function SearchView() {
             <TabButton active={tab === 'statuses'} onClick={() => setTab('statuses')} count={counts.statuses}>Posts</TabButton>
             <TabButton active={tab === 'accounts'} onClick={() => setTab('accounts')} count={counts.accounts}>People</TabButton>
             <TabButton active={tab === 'hashtags'} onClick={() => setTab('hashtags')} count={counts.hashtags}>Hashtags</TabButton>
+            {settings.value.seenHistory && (
+              <TabButton active={tab === 'seen'} onClick={() => setTab('seen')} count={seen?.length ?? 0}>Seen</TabButton>
+            )}
           </div>
 
           {tab === 'statuses' &&
@@ -171,9 +195,60 @@ export function SearchView() {
                 </button>
               ))
             ))}
+
+          {tab === 'seen' && (
+            seenBusy ? (
+              <div class="state-block" role="status" aria-busy="true">
+                <span class="spinner" aria-hidden="true" />
+                <p>Searching your seen posts…</p>
+              </div>
+            ) : (seen ?? []).length === 0 ? (
+              <div class="state-block">
+                <h2>No seen posts match</h2>
+                <p>
+                  The history only covers posts that appeared in your timelines while seen-post history was on.
+                </p>
+              </div>
+            ) : (
+              (seen ?? []).map((p) => <SeenRow key={p.id} post={p} />)
+            )
+          )}
         </>
       )}
     </div>
+  )
+}
+
+function SeenRow({ post: p }: { post: SeenPost }) {
+  return (
+    <article
+      class="search__seen-row"
+      role="link"
+      tabIndex={0}
+      aria-label={`${p.name} ${p.acct}: ${p.text.slice(0, 120)}`}
+      onClick={() => navigate(`/statuses/${p.id}`)}
+      onKeyDown={(e: KeyboardEvent) => {
+        if (e.key !== 'Enter' || e.target !== e.currentTarget) return
+        e.preventDefault()
+        navigate(`/statuses/${p.id}`)
+      }}
+    >
+      <img class="search__seen-avatar" src={p.avatar} alt="" width={40} height={40} loading="lazy" />
+      <div class="search__seen-body">
+        <p class="search__seen-line">
+          <span class="search__seen-name">{replaceEmojis(p.name, [])}</span>{' '}
+          <span class="search__seen-acct">{p.acct}</span>
+          <span class="search__seen-time" title={formatAbsolute(p.ts)}>
+            <time dateTime={p.ts}>{formatRelative(p.ts)}</time>
+          </span>
+        </p>
+        <p class="search__seen-text">{p.text}</p>
+        <p class="search__seen-stats num" aria-label={`${p.favs} favourites, ${p.boosts} boosts`}>
+          <Icon name="heart" size={13} /> {formatCount(p.favs)}
+          <Icon name="repeat" size={13} /> {formatCount(p.boosts)}
+        </p>
+      </div>
+    </article>
   )
 }
 

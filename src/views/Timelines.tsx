@@ -66,6 +66,12 @@ function titleFor(props: TimelinePageProps): string {
 
 const PAGE_SIZE = 30
 
+/** First federated query on a server that knows many domains can take ~2min
+ *  server-side (GTS warms its cache); later loads are instant. */
+function timeoutFor(props: TimelinePageProps): number {
+  return props.kind === 'federated' ? 240000 : 90000
+}
+
 export function TimelinePage(props: TimelinePageProps) {
   const title = titleFor(props)
   useTitle(title)
@@ -89,11 +95,9 @@ export function TimelinePage(props: TimelinePageProps) {
     setPending([])
     setNextMaxId(null)
     try {
-      // A freshly-created token's first home timeline can take ~60s server-side
-      // (cold federation lookups), so give timelines a long leash.
       const page = await api.value.page<Status>(endpoint(props), {
         query: { limit: PAGE_SIZE, local: props.kind === 'local' ? true : undefined },
-        timeoutMs: 90000,
+        timeoutMs: timeoutFor(props),
       })
       if (seq !== requestSeq.current) return
       setItems(page.items)
@@ -208,7 +212,11 @@ export function TimelinePage(props: TimelinePageProps) {
       {state === 'loading' && (
         <div class="state-block" role="status" aria-busy="true">
           <div class="spinner" aria-hidden="true" />
-          <p>Loading posts…</p>
+          <p>
+            {props.kind === 'federated'
+              ? 'Asking your server to sort its whole known fediverse. The first load can take a minute or two; later loads are quick.'
+              : 'Loading posts…'}
+          </p>
         </div>
       )}
 

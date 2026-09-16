@@ -238,3 +238,32 @@
   height: 24px;
   object-fit: contain;
 }
+
+/* Interaction policy (who can reply/boost/like) */
+.compose__policy {
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.compose__policy-hint {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+}
+
+.compose__policy-grid {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.compose__policy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 44px;
+}
+
+.compose__policy-row > span:first-child {
+  font-size: var(--fs-sm);
+}

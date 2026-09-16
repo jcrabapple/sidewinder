@@ -14,6 +14,7 @@ import { openCompose } from '../state/compose'
 import { navigate } from '../router'
 import { toast } from '../state/toast'
 import { toggleFav, toggleBoost, toggleBookmark, deleteStatus } from '../state/statusActions'
+import { policySummaries, policyVerdicts, type PolicyVerdict } from '../util/policy'
 import { Icon } from '../components/Icon'
 import { MediaGrid } from './MediaGrid'
 import { Poll } from './Poll'
@@ -104,6 +105,8 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
       )}
 
       <StatusBody status={status} variant={variant} onUpdated={updated} />
+
+      <PolicyChips status={status} />
 
       {showActions && (
         <ActionBar status={status} own={status.account.id === me} onUpdated={updated} />
@@ -239,15 +242,37 @@ async function resolveMention(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
+/** Chips shown when the author restricted who can interact with the post
+ *  (GoToSocial interaction policies). Invisible for unrestricted posts. */
+function PolicyChips({ status }: { status: Status }) {
+  const summaries = policySummaries(status)
+  if (summaries.length === 0) return null
+  return (
+    <div class="status__policies" aria-label="Interaction restrictions">
+      {summaries.map((s) => (
+        <span key={s} class="status__policy-chip">{s}</span>
+      ))}
+    </div>
+  )
+}
+
 function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; onUpdated: (s: Status) => void }) {
   const canBoost = status.visibility === 'public' || status.visibility === 'unlisted' || status.visibility === 'local'
+  const me = activeSession.value?.account.id ?? ''
+  const mentionedMe = (status.mentions ?? []).some((m) => m.id === me)
+  const v = policyVerdicts(status, own, mentionedMe)
+  const replyDenied = v.reply === 'denied'
+  const boostDenied = canBoost ? v.boost === 'denied' : true
+  const favDenied = v.fav === 'denied'
+  const approval = (verdict: PolicyVerdict) => verdict === 'approval' ? ' (will request approval)' : ''
 
   return (
     <div class="status__actions">
       <button
         class="icon-btn action"
-        aria-label={`Reply, ${formatCount(status.replies_count)} replies`}
-        title="Reply"
+        aria-label={`Reply, ${formatCount(status.replies_count)} replies${approval(v.reply)}`}
+        title={replyDenied ? 'The author has not allowed replies to this post' : `Reply${approval(v.reply)}`}
+        disabled={replyDenied}
         onClick={() => openCompose({ replyTo: status })}
       >
         <Icon name="reply" size={18} />
@@ -256,9 +281,9 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
       <button
         class="icon-btn action action--boost"
         aria-pressed={status.reblogged}
-        aria-label={status.reblogged ? 'Undo boost' : 'Boost'}
-        title={status.reblogged ? 'Undo boost' : 'Boost'}
-        disabled={!canBoost}
+        aria-label={`${status.reblogged ? 'Undo boost' : 'Boost'}${approval(v.boost)}`}
+        title={boostDenied ? 'The author has not allowed boosts of this post' : `${status.reblogged ? 'Undo boost' : 'Boost'}${approval(v.boost)}`}
+        disabled={boostDenied}
         onClick={() => toggleBoost(status, onUpdated).catch(() => {})}
       >
         <Icon name="repeat" size={18} />
@@ -267,8 +292,9 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
       <button
         class="icon-btn action action--fav"
         aria-pressed={status.favourited}
-        aria-label={status.favourited ? 'Unlike' : 'Favourite'}
-        title={status.favourited ? 'Unlike' : 'Favourite'}
+        aria-label={`${status.favourited ? 'Unlike' : 'Favourite'}${approval(v.fav)}`}
+        title={favDenied ? 'The author has not allowed likes on this post' : `${status.favourited ? 'Unlike' : 'Favourite'}${approval(v.fav)}`}
+        disabled={favDenied}
         onClick={() => toggleFav(status, onUpdated).catch(() => {})}
       >
         <Icon name="heart" size={18} />

@@ -15,6 +15,33 @@ import './Compose.css'
 
 type Visibility = 'public' | 'unlisted' | 'private' | 'direct'
 
+/** Presets for the per-post interaction policy (GoToSocial extension). */
+type PolicyChoice = 'default' | 'public' | 'followers' | 'mentioned' | 'following' | 'nobody' | 'approval'
+
+const POLICY_OPTIONS: { value: PolicyChoice; label: string }[] = [
+  { value: 'default', label: 'Default' },
+  { value: 'public', label: 'Anyone' },
+  { value: 'followers', label: 'Followers' },
+  { value: 'following', label: 'People I follow' },
+  { value: 'mentioned', label: 'Mentioned only' },
+  { value: 'approval', label: 'With my approval' },
+  { value: 'nobody', label: 'Nobody' },
+]
+
+function rulesFor(choice: PolicyChoice): { automatic_approval: string[]; manual_approval: string[] } | null {
+  switch (choice) {
+    case 'public': return { automatic_approval: ['public'], manual_approval: [] }
+    case 'followers': return { automatic_approval: ['followers'], manual_approval: [] }
+    case 'following': return { automatic_approval: ['following'], manual_approval: [] }
+    case 'mentioned': return { automatic_approval: ['mentioned'], manual_approval: [] }
+    // Nobody but the author (mentions the server auto-adds stay allowed).
+    case 'nobody': return { automatic_approval: ['author'], manual_approval: [] }
+    // Everyone else must send a request the author approves manually.
+    case 'approval': return { automatic_approval: ['author'], manual_approval: ['public'] }
+    default: return null
+  }
+}
+
 interface Limits {
   maxChars: number
   maxMedia: number
@@ -107,6 +134,10 @@ export function ComposeHost() {
   const [limits, setLimits] = useState<Limits>(DEFAULT_LIMITS)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerQuery, setPickerQuery] = useState('')
+  const [policyOpen, setPolicyOpen] = useState(false)
+  const [replyPolicy, setReplyPolicy] = useState<PolicyChoice>('default')
+  const [boostPolicy, setBoostPolicy] = useState<PolicyChoice>('default')
+  const [favPolicy, setFavPolicy] = useState<PolicyChoice>('default')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [altWarned, setAltWarned] = useState(false)
@@ -138,6 +169,10 @@ export function ComposeHost() {
     setPollOn(false)
     setPollOptions(['', ''])
     setPollMultiple(false)
+    setPolicyOpen(false)
+    setReplyPolicy('default')
+    setBoostPolicy('default')
+    setFavPolicy('default')
     if (editing) {
       setText(editing.text ?? stripTags(editing.content))
       setSpoiler(editing.spoiler_text)
@@ -259,6 +294,13 @@ export function ComposeHost() {
     }
     if (replyTo) body.in_reply_to_id = replyTo.id
     if (media.length) body.media_ids = media.map((d) => d.attachment.id)
+    if (!editing && (replyPolicy !== 'default' || boostPolicy !== 'default' || favPolicy !== 'default')) {
+      const ip: Record<string, unknown> = {}
+      const r = rulesFor(replyPolicy); if (r) ip.can_reply = r
+      const b = rulesFor(boostPolicy); if (b) ip.can_reblog = b
+      const f = rulesFor(favPolicy); if (f) ip.can_favourite = f
+      if (Object.keys(ip).length > 0) body.interaction_policy = ip
+    }
     if (pollOn && !editing) {
       body.poll = {
         options: usedPollOptions,
@@ -502,7 +544,20 @@ export function ComposeHost() {
             >
               <Icon name="smile" size={20} />
             </button>
-            <label class="compose__visibility">
+            {!editing && (
+            <button
+              type="button"
+              class="icon-btn"
+              data-active={policyOpen || undefined}
+              onClick={() => setPolicyOpen((v) => !v)}
+              aria-label="Who can interact"
+              title="Who can interact"
+              aria-expanded={policyOpen}
+            >
+              <Icon name="sliders" size={20} />
+            </button>
+          )}
+          <label class="compose__visibility">
               <span class="visually-hidden">Visibility</span>
               <select
                 class="select"
@@ -519,6 +574,32 @@ export function ComposeHost() {
               {busy ? 'Publishing…' : editing ? 'Save changes' : replyTo ? 'Reply' : 'Post'}
             </button>
           </div>
+
+          {policyOpen && (
+            <div class="compose__policy" role="region" aria-label="Who can interact">
+              <p class="compose__policy-hint">Who can interact with this post? (GoToSocial extension)</p>
+              <div class="compose__policy-grid">
+                <label class="compose__policy-row">
+                  <span>Can reply</span>
+                  <select class="select" value={replyPolicy} onChange={(e) => setReplyPolicy((e.target as HTMLSelectElement).value as PolicyChoice)}>
+                    {POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label class="compose__policy-row">
+                  <span>Can boost</span>
+                  <select class="select" value={boostPolicy} onChange={(e) => setBoostPolicy((e.target as HTMLSelectElement).value as PolicyChoice)}>
+                    {POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+                <label class="compose__policy-row">
+                  <span>Can like</span>
+                  <select class="select" value={favPolicy} onChange={(e) => setFavPolicy((e.target as HTMLSelectElement).value as PolicyChoice)}>
+                    {POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
 
           {pickerOpen && (
             <div class="compose__emoji" role="region" aria-label="Emoji picker">

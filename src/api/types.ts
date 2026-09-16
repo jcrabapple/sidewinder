@@ -115,6 +115,20 @@ export interface Application {
   website?: string | null
 }
 
+/** GoToSocial interaction policy: who may reply/boost/favourite.
+ *  Entries are keywords (public, followers, following, mutuals, mentioned,
+ *  author, me) or full ActivityPub actor URIs. */
+export interface PolicyRules {
+  automatic_approval: string[]
+  manual_approval: string[]
+}
+
+export interface InteractionPolicy {
+  can_favourite?: PolicyRules
+  can_reblog?: PolicyRules
+  can_reply?: PolicyRules
+}
+
 export interface PreviewCard {
   url: string
   title: string
@@ -156,6 +170,7 @@ export interface Status {
   account: Account
   reblog: Status | null
   card?: PreviewCard | null
+  interaction_policy?: InteractionPolicy | null
   filtered?: FilterResult[]
 }
 

@@ -1,0 +1,168 @@
+/* App shell layout: rail + centered main column; bottom padding clears the mobile tab bar. */
+.shell {
+  min-height: 100dvh;
+  display: flex;
+}
+
+.main-col {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding: var(--sp-4) var(--sp-4) calc(76px + env(safe-area-inset-bottom, 0px));
+}
+
+@media (min-width: 920px) {
+  .main-col {
+    padding: var(--sp-6) var(--sp-6) var(--sp-7);
+  }
+}
+
+.view-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 48px;
+  padding: var(--sp-2) 0;
+  background: color-mix(in oklab, var(--bg) 86%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-2);
+}
+
+.view-header h1 {
+  margin: 0;
+  font-size: var(--fs-l);
+  letter-spacing: var(--tracking-display);
+  line-height: var(--lh-tight);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.view-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+}
+
+/* Empty / error / loading states for data views */
+.state-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-7) var(--sp-4);
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.state-block h2 {
+  margin: 0;
+  font-size: var(--fs-l);
+  color: var(--fg);
+}
+
+.state-block p { margin: 0; max-width: 45ch; }
+
+.error-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-m);
+  background: var(--danger-muted);
+  color: var(--fg);
+  font-size: var(--fs-s);
+}
+
+/* Dialog shared chrome (native <dialog>) */
+dialog.sw-dialog {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  color: var(--fg);
+  padding: 0;
+  width: min(560px, calc(100vw - 2 * var(--sp-4)));
+  max-height: min(85dvh, 900px);
+  box-shadow: var(--shadow-pop);
+}
+
+dialog.sw-dialog::backdrop {
+  background: var(--scrim);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  dialog.sw-dialog[open] {
+    animation: sw-dialog-in var(--dur-med) var(--ease-out);
+  }
+}
+
+@keyframes sw-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.sw-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-5) var(--sp-2);
+}
+
+.sw-dialog__head h2 {
+  margin: 0;
+  font-size: var(--fs-l);
+  letter-spacing: var(--tracking-display);
+}
+
+.sw-dialog__body {
+  padding: var(--sp-2) var(--sp-5) var(--sp-5);
+  overflow-y: auto;
+}
+
+/* Menus (inline popovers) */
+.menu {
+  position: absolute;
+  z-index: 50;
+  min-width: 200px;
+  padding: var(--sp-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-pop);
+}
+
+.menu button, .menu a {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--radius-s);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-s);
+  text-decoration: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu button:hover:not(:disabled), .menu a:hover { background: var(--surface-3); }
+.menu button:disabled { opacity: 0.5; cursor: not-allowed; }
+.menu [role='separator'] {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
+}
+.menu .danger { color: var(--danger); }

@@ -44,7 +44,9 @@ export function SearchView() {
     setError(null)
     const resolve = /^https?:\/\//.test(submitted)
     api.value
-      .get<SearchResults>('/api/v2/search', { q: submitted, resolve, limit: 20 })
+      // GTS cold searches can take well over 30s (instance warms on first
+      // query) — give it a 2-minute leash like the timelines get.
+      .request<SearchResults>('/api/v2/search', { query: { q: submitted, resolve, limit: 20 }, timeoutMs: 120_000 })
       .then((res) => {
         if (seq !== requestSeq.current) return
         setResults(res)
@@ -52,7 +54,12 @@ export function SearchView() {
       })
       .catch((e: unknown) => {
         if (seq !== requestSeq.current) return
-        setError(e instanceof Error ? e.message : 'Search failed.')
+        const msg = e instanceof Error ? e.message : 'Search failed.'
+        setError(
+          /abort|network/i.test(msg)
+            ? 'Search timed out — the instance is still warming up. Give it a moment and try again.'
+            : msg,
+        )
         setState('error')
       })
   }, [submitted])

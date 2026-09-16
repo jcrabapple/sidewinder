@@ -1,0 +1,26 @@
+{
+  "name": "Sidewinder",
+  "short_name": "Sidewinder",
+  "description": "A web client for GoToSocial and the fediverse",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#161d19",
+  "theme_color": "#161d19",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

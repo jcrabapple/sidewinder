@@ -7,6 +7,8 @@ import { AppRoutes } from './views/registry'
 import { ComposeHost } from './views/Compose'
 import { ToastHost } from './components/ToastHost'
 import { openCompose } from './state/compose'
+import { refreshFollowRequestCount } from './state/notifications'
+import { ShortcutsHost } from './components/Shortcuts'
 import './shell.css'
 
 startRouter()
@@ -18,6 +20,7 @@ consumeOAuthReturn().catch((e) => console.error('OAuth return failed', e))
 export function App() {
   // Global must-haves: 'n' opens compose, '/' jumps to search.
   useEffect(() => {
+    refreshFollowRequestCount()
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const typing =
@@ -47,6 +50,7 @@ export function App() {
       <MobileTabs />
       <ComposeHost />
       <ToastHost />
+      <ShortcutsHost />
     </div>
   )
 }

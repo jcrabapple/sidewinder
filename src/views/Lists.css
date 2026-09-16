@@ -1,0 +1,114 @@
+/* Lists management view */
+.lists__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.lists__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+}
+
+.lists__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-s);
+}
+.lists__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lists__title:hover { color: var(--accent); }
+
+.lists__row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+.lists__dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* Members dialog */
+.lists__members {
+  list-style: none;
+  margin: var(--sp-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+
+.lists__member {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-m);
+}
+.lists__member:hover { background: var(--surface-2); }
+
+.lists__member-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-s);
+  flex: none;
+}
+
+.lists__member-names {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: var(--lh-tight);
+}
+.lists__member-names .name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lists__member-names .handle {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lists__search-results {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.lists__section-label {
+  margin: var(--sp-4) 0 var(--sp-1);
+  font-size: var(--fs-s);
+  font-weight: 600;
+  color: var(--fg-muted);
+}

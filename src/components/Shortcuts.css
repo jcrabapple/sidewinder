@@ -1,0 +1,61 @@
+/* Keyboard shortcuts help dialog */
+.shortcuts__section h3 {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-size: var(--fs-s);
+  color: var(--fg-muted);
+}
+.shortcuts__section:first-child h3 { margin-top: 0; }
+
+.shortcuts__list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.shortcuts__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 32px;
+}
+
+.shortcuts__row dt {
+  flex: none;
+  min-width: 120px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.shortcuts__row dd {
+  margin: 0;
+  color: var(--fg);
+}
+
+.shortcuts__row kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--fg);
+}
+
+.shortcuts__then {
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+}
+
+.shortcuts__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--sp-4);
+}

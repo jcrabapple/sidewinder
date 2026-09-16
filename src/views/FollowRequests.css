@@ -1,0 +1,80 @@
+/* Follow Requests view: account rows with approve/reject actions. */
+
+.follow-requests__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.follow-requests__item {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.follow-requests__avatar-link { flex: none; border-radius: var(--radius-m); }
+.follow-requests__avatar {
+  display: block;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.follow-requests__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.follow-requests__names {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.follow-requests__name {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+a.follow-requests__name:hover { text-decoration: underline; }
+
+.follow-requests__handle {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.follow-requests__when {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.follow-requests__note {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.follow-requests__actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.follow-requests__more { margin: var(--sp-4) auto; }

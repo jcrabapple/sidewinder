@@ -1,0 +1,17 @@
+/* Favourites / Bookmarks collections */
+.collections__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.collections__more {
+  align-self: center;
+  margin: var(--sp-4) 0;
+}
+
+.collections__end {
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: var(--fs-s);
+  padding: var(--sp-5) 0;
+}

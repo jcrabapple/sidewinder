@@ -1,0 +1,28 @@
+/* Thread view: ancestor chain, focused status, nested replies. */
+
+.thread__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.thread__node {
+  display: flex;
+  flex-direction: column;
+}
+
+.thread__focus {
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.thread__reply {
+  min-width: 0;
+}
+
+.thread__no-replies {
+  margin: var(--sp-5) 0;
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: var(--fs-s);
+}

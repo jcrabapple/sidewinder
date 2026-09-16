@@ -6,6 +6,7 @@
 import { route, navigate } from '../router'
 import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
+import { followRequestCount } from '../state/notifications'
 import { openCompose } from '../state/compose'
 import './Nav.css'
 
@@ -19,11 +20,12 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home' },
-  { href: '/notifications', label: 'Notifications', icon: 'bell', attention: true },
+  { href: '/notifications', label: 'Notifications', icon: 'bell' },
   { href: '/search', label: 'Search', icon: 'search' },
   { href: '/lists', label: 'Lists', icon: 'list' },
   { href: '/favourites', label: 'Favourites', icon: 'star' },
   { href: '/bookmarks', label: 'Bookmarks', icon: 'bookmark' },
+  { href: '/follow_requests', label: 'Follow requests', icon: 'user-plus', attention: true },
 ]
 
 function isActive(href: string, segments: string[]): boolean {
@@ -35,14 +37,19 @@ function isActive(href: string, segments: string[]): boolean {
 
 function NavButton({ item }: { item: NavItem }) {
   const active = isActive(item.href, route.value.segments)
+  const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
   return (
     <a
       href={'#' + item.href}
       class="nav-link"
       aria-current={active ? 'page' : undefined}
     >
-      <Icon name={item.icon} size={22} />
+      <span class="nav-link__icon">
+        <Icon name={item.icon} size={22} />
+        {showDot && <span class="nav-dot" aria-hidden="true" />}
+      </span>
       <span>{item.label}</span>
+      {showDot && <span class="visually-hidden">{`, ${followRequestCount.value} pending follow requests`}</span>}
     </a>
   )
 }

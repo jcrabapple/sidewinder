@@ -31,6 +31,15 @@ export function raiseSeenTop(session: string, timeline: string, id: string): str
   return prev
 }
 
+/** Force-set the high-water mark (server marker adoption) — no newer-than check. */
+export function setSeenTop(session: string, timeline: string, id: string): void {
+  try {
+    localStorage.setItem(key(session, timeline), id)
+  } catch {
+    // Storage full/blocked: read state stays session-local in memory.
+  }
+}
+
 /** Unseen = strictly newer than the mark. Empty mark means "nothing to catch up on yet". */
 export function isNewer(id: string, seenTop: string): boolean {
   return seenTop !== '' && id > seenTop

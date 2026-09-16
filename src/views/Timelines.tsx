@@ -9,6 +9,7 @@ import type { Status } from '../api/types'
 import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
 import { getSeenTop, raiseSeenTop, isNewer } from '../state/readState'
+import { queueMarkerPush } from '../state/markers'
 import { StatusCard } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
@@ -112,7 +113,14 @@ export function TimelinePage(props: TimelinePageProps) {
       // PREVIOUS mark (returned) is what this visit's pill/divider compare
       // against, so a plain reload never counts old posts as unread.
       if (page.items.length > 0) {
-        setVisitMark(raiseSeenTop(session, key, page.items[0].id))
+        const prev = raiseSeenTop(session, key, page.items[0].id)
+        setVisitMark(prev)
+        // Push only when the mark actually ROSE (items[0] newer than prev).
+        // `prev !== id` would also fire on a shrunk timeline (posts deleted
+        // above the mark), regressing the server marker.
+        if (props.kind === 'home' && page.items[0].id > prev) {
+          queueMarkerPush('home', page.items[0].id)
+        }
       }
     } catch (e) {
       if (seq !== requestSeq.current) return

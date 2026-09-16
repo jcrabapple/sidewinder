@@ -10,6 +10,7 @@ import { openCompose } from './state/compose'
 import { toast } from './state/toast'
 import { installKeyboardSheetFix } from './util/keyboard'
 import { refreshFollowRequestCount } from './state/notifications'
+import { syncMarkersFromServer } from './state/markers'
 import { ShortcutsHost } from './components/Shortcuts'
 import './shell.css'
 
@@ -24,6 +25,12 @@ consumeOAuthReturn().catch((e) => {
 })
 
 export function App() {
+  // Adopt server read markers once the session is known (re-runs on switch).
+  const sessionId = activeSession.value?.id ?? null
+  useEffect(() => {
+    if (sessionId) void syncMarkersFromServer()
+  }, [sessionId])
+
   // Global must-haves: 'n' opens compose, '/' jumps to search.
   useEffect(() => {
     refreshFollowRequestCount()

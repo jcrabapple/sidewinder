@@ -20,6 +20,7 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home' },
+  { href: '/catchup', label: 'Catch-up', icon: 'inbox' },
   { href: '/notifications', label: 'Notifications', icon: 'bell' },
   { href: '/search', label: 'Search', icon: 'search' },
   { href: '/lists', label: 'Lists', icon: 'list' },

@@ -115,6 +115,15 @@ export interface Application {
   website?: string | null
 }
 
+export interface PreviewCard {
+  url: string
+  title: string
+  description: string
+  type: 'link' | 'photo' | 'video' | 'rich'
+  image: string | null
+  provider_name?: string
+}
+
 export interface Status {
   id: string
   created_at: string
@@ -146,6 +155,7 @@ export interface Status {
   application: Application | null
   account: Account
   reblog: Status | null
+  card?: PreviewCard | null
   filtered?: FilterResult[]
 }
 

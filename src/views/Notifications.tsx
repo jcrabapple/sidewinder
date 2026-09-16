@@ -3,11 +3,12 @@
  * prepends from the user stream. Status-bearing notifications render a
  * compact StatusCard under the actor line.
  */
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { Notification, Status } from '../api/types'
 import { api } from '../state/auth'
 import { onNotification } from '../state/streaming'
 import { refreshFollowRequestCount } from '../state/notifications'
+import { queueMarkerPush, syncMarkersFromServer } from '../state/markers'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate } from '../router'
@@ -69,6 +70,71 @@ function kindInfo(n: Notification): KindInfo {
   }
 }
 
+type ListEntry = { kind: 'single'; notification: Notification } | { kind: 'group'; group: NotifGroup }
+
+interface NotifGroup {
+  key: string
+  type: 'favourite' | 'reblog'
+  status: Status
+  /** Newest first. */
+  items: Notification[]
+}
+
+/** Status id a notification points at, unwrapping any reblog wrapper. */
+function targetStatusId(n: Notification): string | null {
+  const s = n.status
+  if (!s) return null
+  return s.reblog ? s.reblog.id : s.id
+}
+
+/**
+ * Collapse consecutive favourite/reblog notifications for the same status
+ * into a single group. Runs over the full rendered list, so groups merge
+ * across loadMore() page boundaries and showPending() prepends.
+ */
+function groupNotifications(items: Notification[]): ListEntry[] {
+  const entries: ListEntry[] = []
+  let open: NotifGroup | null = null
+  const flush = () => {
+    if (!open) return
+    if (open.items.length === 1) entries.push({ kind: 'single', notification: open.items[0] })
+    else entries.push({ kind: 'group', group: open })
+    open = null
+  }
+  for (const n of items) {
+    const groupable = (n.type === 'favourite' || n.type === 'reblog') && n.status
+    const sid = groupable ? targetStatusId(n) : null
+    if (groupable && sid && open && open.type === n.type && targetStatusId(open.items[0]) === sid) {
+      stableGroupPush(open, n)
+      continue
+    }
+    flush()
+    if (groupable && sid && n.status) {
+      open = { key: `group-${n.id}`, type: n.type as 'favourite' | 'reblog', status: n.status, items: [n] }
+    } else {
+      entries.push({ kind: 'single', notification: n })
+    }
+  }
+  flush()
+  return entries
+}
+
+function stableGroupPush(g: NotifGroup, n: Notification) {
+  g.items.push(n)
+}
+
+/** 'Ada', 'Ada and Ben', or 'Ada, Ben and 3 others' from newest-first items. */
+function actorSummary(items: Notification[]): string {
+  const names = items.map((n) => {
+    const a = n.account
+    return a ? a.display_name || a.username : 'Someone'
+  })
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  const rest = names.length - 2
+  return `${names[0]}, ${names[1]} and ${rest} other${rest === 1 ? '' : 's'}`
+}
+
 export function NotificationsView() {
   useTitle('Notifications')
 
@@ -94,6 +160,12 @@ export function NotificationsView() {
       setItems(page.items)
       setNextMaxId(page.nextMaxId)
       setState('ready')
+      // Newest loaded notification is read by definition → push the marker.
+      // Push the notifications marker only for the unfiltered view: the
+      // newest item of a filtered view is not "the newest read
+      // notification", and pushing it would misplace the server marker for
+      // every other client.
+      if (f === 'all' && page.items.length > 0) queueMarkerPush('notifications', page.items[0].id)
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Notifications could not be loaded.')
@@ -123,6 +195,11 @@ export function NotificationsView() {
     void refreshFollowRequestCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter])
+
+  // Pick up markers written by other devices (guarded to once per session).
+  useEffect(() => {
+    void syncMarkersFromServer()
+  }, [])
 
   // Live notifications held behind a pill, like the timelines.
   useEffect(() => {
@@ -164,6 +241,9 @@ export function NotificationsView() {
   function selectFilter(f: Filter) {
     if (f !== filter) setFilter(f)
   }
+
+  // Grouping is derived from the flat items list so mutation handlers stay untouched.
+  const entries = useMemo(() => groupNotifications(items), [items])
 
   return (
     <div class="notifications">
@@ -232,14 +312,23 @@ export function NotificationsView() {
 
       {state === 'ready' && items.length > 0 && (
         <div class="notifications__list" aria-busy={loadingMore}>
-          {items.map((n) => (
-            <NotificationRow
-              key={n.id}
-              notification={n}
-              onStatusUpdated={onStatusUpdated}
-              onStatusDeleted={onStatusDeleted}
-            />
-          ))}
+          {entries.map((e) =>
+            e.kind === 'single' ? (
+              <NotificationRow
+                key={e.notification.id}
+                notification={e.notification}
+                onStatusUpdated={onStatusUpdated}
+                onStatusDeleted={onStatusDeleted}
+              />
+            ) : (
+              <GroupedRow
+                key={e.group.key}
+                group={e.group}
+                onStatusUpdated={onStatusUpdated}
+                onStatusDeleted={onStatusDeleted}
+              />
+            ),
+          )}
           {error && <p class="error-note" role="alert">{error}</p>}
           {nextMaxId ? (
             <button class="btn notifications__more" disabled={loadingMore} onClick={() => void loadMore()}>
@@ -251,6 +340,84 @@ export function NotificationsView() {
         </div>
       )}
     </div>
+  )
+}
+
+function GroupedRow({
+  group,
+  onStatusUpdated,
+  onStatusDeleted,
+}: {
+  group: NotifGroup
+  onStatusUpdated: (s: Status) => void
+  onStatusDeleted: (id: string) => void
+}) {
+  const kind = kindInfo(group.items[0])
+  const summary = `${actorSummary(group.items)} ${kind.text}`
+  const newest = group.items[0]
+  // Avatar cluster: up to 4 actors, newest first, plus a '+N' overflow chip.
+  const shown = group.items.slice(0, 4)
+  const overflow = group.items.length - shown.length
+  // The two newest actors get linked names in the summary line.
+  const named = group.items.slice(0, 2)
+  const rest = group.items.length - named.length
+
+  return (
+    <article class="notifications__item" aria-label={summary}>
+      <div class="notifications__line">
+        <span class={`notifications__badge ${kind.cls}`} aria-hidden="true">
+          <Icon name={kind.icon} size={16} />
+        </span>
+        <span class="notifications__group-avatars" aria-hidden="true">
+          {shown.map((n) =>
+            n.account ? (
+              <img
+                key={n.id}
+                class="notifications__group-avatar"
+                src={n.account.avatar_static}
+                alt=""
+                width={24}
+                height={24}
+                loading="lazy"
+              />
+            ) : null,
+          )}
+          {overflow > 0 && <span class="notifications__group-more">+{overflow}</span>}
+        </span>
+        <p class="notifications__summary">
+          {named.map((n, i) => {
+            const a = n.account
+            const name = a ? a.display_name || a.username : 'Someone'
+            return (
+              <>
+                {i > 0 && (rest > 0 ? ', ' : ' and ')}
+                {a ? (
+                  <a class="notifications__name" href={`#/accounts/${a.id}`}>
+                    {replaceEmojis(name, a.emojis)}
+                  </a>
+                ) : (
+                  <span class="notifications__name">{name}</span>
+                )}
+              </>
+            )
+          })}
+          {rest > 0 && ` and ${rest} other${rest === 1 ? '' : 's'}`}{' '}
+          <span class="notifications__verb">{kind.text}</span>
+        </p>
+        <span class="notifications__time" title={formatAbsolute(newest.created_at)}>
+          <time dateTime={newest.created_at}>{formatRelative(newest.created_at)}</time>
+        </span>
+      </div>
+
+      <div class="notifications__status">
+        <StatusCard
+          status={group.status}
+          variant="compact"
+          onStatusUpdated={onStatusUpdated}
+          onStatusDeleted={onStatusDeleted}
+        />
+      </div>
+    </article>
   )
 }
 

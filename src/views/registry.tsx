@@ -7,6 +7,7 @@ import { SearchView } from './Search'
 import { CollectionsView } from './Collections'
 import { ListsView } from './Lists'
 import { WrappedView } from './Wrapped'
+import { CatchUpView } from './CatchUp'
 import { FollowRequestsView } from './FollowRequests'
 import { SettingsView } from './Settings'
 import { navigate } from '../router'
@@ -29,6 +30,8 @@ export function AppRoutes({ route }: { route: Route }) {
       return seg1 ? <TimelinePage kind="list" listId={seg1} /> : <ListsView />
     case 'notifications':
       return <NotificationsView />
+    case 'catchup':
+      return <CatchUpView />
     case 'statuses':
       return seg1 ? <ThreadView id={seg1} /> : <NotFound path={route.href} />
     case 'accounts':

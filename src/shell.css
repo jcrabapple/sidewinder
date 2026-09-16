@@ -174,6 +174,12 @@ dialog.sw-dialog::backdrop {
   }
 }
 
+/* Touch devices: auto-hiding overlay scrollbars, no permanent thumb. */
+@media (pointer: coarse) {
+  html { scrollbar-width: none; }
+  ::-webkit-scrollbar { display: none; }
+}
+
 /* Menus (inline popovers) */
 .menu {
   position: absolute;

@@ -23,9 +23,25 @@ export function toggleFav(status: Status, onUpdated: StatusUpdated): Promise<voi
   return run(async () => onUpdated(await api.value.post<Status>(`/api/v1/statuses/${status.id}/${path}`)), 'Could not save that')
 }
 
-export function toggleBoost(status: Status, onUpdated: StatusUpdated): Promise<void> {
+export async function toggleBoost(status: Status, onUpdated: StatusUpdated): Promise<void> {
   const path = status.reblogged ? 'unreblog' : 'reblog'
-  return run(async () => onUpdated(await api.value.post<Status>(`/api/v1/statuses/${status.id}/${path}`)), 'Could not boost that')
+  try {
+    const res = await api.value.post<Status>(`/api/v1/statuses/${status.id}/${path}`)
+    // reblog returns a boost wrapper (account = booster, empty content);
+    // unreblog returns the original. Either way, update the card in place
+    // with the ORIGINAL status so the UI just flips the button state.
+    if (res.reblog) {
+      onUpdated({ ...res.reblog, reblogged: path === 'reblog' })
+    } else {
+      onUpdated({
+        ...status,
+        reblogged: path === 'reblog',
+        reblogs_count: Math.max(0, status.reblogs_count + (path === 'reblog' ? 1 : -1)),
+      })
+    }
+  } catch (e) {
+    toast(e instanceof Error ? e.message : 'Could not boost that', 'error')
+  }
 }
 
 export function toggleBookmark(status: Status, onUpdated: StatusUpdated): Promise<void> {

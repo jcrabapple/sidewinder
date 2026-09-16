@@ -46,7 +46,10 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
   const me = activeSession.value?.account.id
 
   const updated = (s: Status) => {
-    const merged = boosted ? { ...outer, reblog: s } : s
+    // Mutation responses can be boost wrappers (account = booster, empty
+    // content); unwrap to the original so nested cards keep their content.
+    const fresh = s.reblog ?? s
+    const merged = boosted ? { ...outer, reblog: fresh } : fresh
     onStatusUpdated?.(merged)
   }
 

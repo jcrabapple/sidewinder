@@ -50,6 +50,13 @@ export function SearchView() {
       .then((res) => {
         if (seq !== requestSeq.current) return
         setResults(res)
+        // Land on the first non-empty tab: GTS status search only covers
+        // your own/interacted posts, so Posts is often legitimately 0 while
+        // People/Hashtags have plenty.
+        if (res.statuses.length === 0) {
+          if (res.accounts.length > 0) setTab('accounts')
+          else if (res.hashtags.length > 0) setTab('hashtags')
+        }
         setState('ready')
       })
       .catch((e: unknown) => {

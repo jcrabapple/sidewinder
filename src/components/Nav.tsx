@@ -3,6 +3,7 @@
  * All targets ≥44px, current location marked for screen readers via
  * aria-current="page".
  */
+import { useRef } from 'preact/hooks'
 import { route, navigate } from '../router'
 import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
@@ -30,6 +31,7 @@ const ITEMS: NavItem[] = [
   { href: '/bookmarks', label: 'Bookmarks', icon: 'bookmark' },
   { href: '/wrapped', label: 'Wrapped', icon: 'sparkle' },
   { href: '/follow_requests', label: 'Follow requests', icon: 'user-plus', attention: true },
+  { href: '/settings', label: 'Settings', icon: 'sliders' },
 ]
 
 function isActive(href: string, segments: string[]): boolean {
@@ -119,18 +121,26 @@ export function NavRail() {
 
 // Mobile tabs: a fixed subset of ITEMS, selected by href so that
 // reordering or inserting into ITEMS cannot silently reshuffle the tabs.
+// Everything else lives behind the "More" sheet.
 const MOBILE_HREFS = ['/', '/notifications', '/search', '/catchup']
 const MOBILE: NavItem[] = MOBILE_HREFS
+  .map((href) => ITEMS.find((i) => i.href === href))
+  .filter((i): i is NavItem => Boolean(i))
+
+const MORE_HREFS = ['/local', '/federated', '/lists', '/favourites', '/bookmarks', '/wrapped', '/follow_requests', '/settings']
+const MORE_ITEMS: NavItem[] = MORE_HREFS
   .map((href) => ITEMS.find((i) => i.href === href))
   .filter((i): i is NavItem => Boolean(i))
 
 export function MobileTabs() {
   const sess = activeSession.value
   if (!sess) return null
+  const segments = route.value.segments
+  const moreActive = MORE_ITEMS.some((item) => isActive(item.href, segments))
   return (
     <nav class="mobile-tabs" aria-label="Primary">
       {MOBILE.map((item) => {
-        const active = isActive(item.href, route.value.segments)
+        const active = isActive(item.href, segments)
         return (
           <a key={item.href} href={'#' + item.href} class="tab" aria-current={active ? 'page' : undefined}>
             <Icon name={item.icon} size={24} />
@@ -138,6 +148,7 @@ export function MobileTabs() {
           </a>
         )
       })}
+      <MoreTab active={moreActive} />
       <button class="tab tab--compose" onClick={() => openCompose()}>
         <span class="tab__fab">
           <Icon name="pencil" size={22} />
@@ -145,5 +156,66 @@ export function MobileTabs() {
         <span>Post</span>
       </button>
     </nav>
+  )
+}
+
+function MoreTab({ active }: { active: boolean }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const segments = route.value.segments
+  const frItem = ITEMS.find((i) => i.href === '/follow_requests')
+  const frDot = (frItem?.attention === true && followRequestCount.value > 0) ?? false
+
+  function close() {
+    ref.current?.close()
+  }
+
+  return (
+    <>
+      <button
+        class="tab tab--more"
+        aria-haspopup="dialog"
+        aria-expanded={ref.current?.open ?? false}
+        onClick={() => ref.current?.showModal()}
+      >
+        <span class="nav-link__icon">
+          <Icon name="more" size={24} />
+          {frDot && <span class="nav-dot" aria-hidden="true" />}
+        </span>
+        <span>More</span>
+      </button>
+      <dialog class="sw-dialog more-sheet" ref={ref} aria-labelledby="more-sheet-title" onClick={(e) => { if (e.target === ref.current) close() }}>
+        <div class="sw-dialog__head">
+          <h2 id="more-sheet-title">More</h2>
+          <button class="icon-btn" aria-label="Close" onClick={close}>
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+        <div class="sw-dialog__body more-sheet__items">
+          {MORE_ITEMS.map((item) => {
+            const itemActive = isActive(item.href, segments)
+            const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
+            return (
+              <a
+                key={item.href}
+                href={'#' + item.href}
+                class="more-sheet__row"
+                aria-current={itemActive ? 'page' : undefined}
+                onClick={close}
+              >
+                <span class="nav-link__icon">
+                  <Icon name={item.icon} size={20} />
+                  {showDot && <span class="nav-dot" aria-hidden="true" />}
+                </span>
+                <span>{item.label}</span>
+                {showDot && (
+                  <span class="visually-hidden">{`${followRequestCount.value} pending follow requests`}</span>
+                )}
+                <Icon name="chevron-right" size={16} />
+              </a>
+            )
+          })}
+        </div>
+      </dialog>
+    </>
   )
 }

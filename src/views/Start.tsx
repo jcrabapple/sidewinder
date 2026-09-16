@@ -52,7 +52,7 @@ export function StartView() {
     <div class="start">
       <div class="start__inner">
         <header class="start__brand">
-          <img src="/favicon.svg" alt="" width="56" height="56" />
+          <img src="/favicon.png" alt="" width="56" height="56" />
           <div>
             <h1 class="start__title">Sidewinder</h1>
             <p class="start__tag">A client for your corner of the fediverse.</p>

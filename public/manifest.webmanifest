@@ -11,15 +11,15 @@
   "theme_color": "#161d19",
   "icons": [
     {
-      "src": "/favicon.svg?v=2",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/favicon.svg?v=2",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ]

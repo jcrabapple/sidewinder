@@ -61,7 +61,7 @@ export function NavRail() {
   return (
     <nav class="nav-rail" aria-label="Primary">
       <a href="#/" class="nav-brand" aria-label="Sidewinder home">
-        <img src="/favicon.svg" alt="" width="34" height="34" />
+        <img src="/favicon.png" alt="" width="34" height="34" />
         <span class="nav-brand__name">Sidewinder</span>
       </a>
       <div class="nav-rail__items">

@@ -194,6 +194,8 @@
   border: none;
   border-radius: var(--radius-s);
   background: transparent;
+  font-size: 22px;
+  line-height: 1;
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }

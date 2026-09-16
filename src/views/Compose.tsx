@@ -8,8 +8,8 @@ import { composeOpen, composeContext, closeCompose } from '../state/compose'
 import { api } from '../state/auth'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
-import { customEmojis, emojisStatus, ensureEmojis, emojisByCategory, searchEmojis } from '../state/emojis'
-import type { Emoji, Instance, MediaAttachment, Status } from '../api/types'
+import { customEmojis, emojisStatus, ensureEmojis, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
+import type { Instance, MediaAttachment, Status } from '../api/types'
 import { Icon } from '../components/Icon'
 import './Compose.css'
 
@@ -286,8 +286,8 @@ export function ComposeHost() {
   }
 
   const title = editing ? 'Edit post' : replyTo ? `Reply to @${replyTo.account.acct}` : 'New post'
-  const filteredEmojis = searchEmojis(customEmojis.value, pickerQuery)
-  const emojiGroups = emojisByCategory(filteredEmojis)
+  const pickerItems = filterPickerEmojis(pickerEmojis(), pickerQuery)
+  const emojiGroups = groupPickerEmojis(pickerItems)
 
   return (
     <dialog
@@ -495,11 +495,11 @@ export function ComposeHost() {
               class="icon-btn"
               data-active={pickerOpen || undefined}
               onClick={() => setPickerOpen((v) => !v)}
-              aria-label="Insert custom emoji"
+              aria-label="Insert emoji"
               title="Insert emoji"
               aria-expanded={pickerOpen}
             >
-              <Icon name="heart" size={20} />
+              <Icon name="smile" size={20} />
             </button>
             <label class="compose__visibility">
               <span class="visually-hidden">Visibility</span>
@@ -520,7 +520,7 @@ export function ComposeHost() {
           </div>
 
           {pickerOpen && (
-            <div class="compose__emoji" role="region" aria-label="Custom emoji picker">
+            <div class="compose__emoji" role="region" aria-label="Emoji picker">
               <input
                 class="input"
                 value={pickerQuery}
@@ -533,25 +533,27 @@ export function ComposeHost() {
                   <span class="spinner" />
                 </div>
               )}
-              {emojisStatus.value === 'error' && <p class="help-text">Could not load this server's emoji.</p>}
-              {emojisStatus.value === 'ready' && filteredEmojis.length === 0 && (
-                <p class="help-text">No emoji match that search.</p>
-              )}
+              {emojisStatus.value === 'error' && <p class="help-text">Could not load this server's custom emoji.</p>}
+              {pickerItems.length === 0 && <p class="help-text">No emoji match that search.</p>}
               <div class="compose__emoji-scroll">
                 {emojiGroups.map(([cat, list]) => (
                   <section key={cat || 'uncategorized'}>
                     {cat && <h3 class="compose__emoji-cat">{cat}</h3>}
                     <div class="compose__emoji-grid">
-                      {list.map((e: Emoji) => (
+                      {list.map((e: PickerEmoji) => (
                         <button
-                          key={e.shortcode}
+                          key={e.key}
                           type="button"
                           class="compose__emoji-btn"
-                          onClick={() => insertSnippet(`:${e.shortcode}:`)}
-                          aria-label={`Insert :${e.shortcode}:`}
-                          title={`:${e.shortcode}:`}
+                          onClick={() => insertSnippet(e.char ?? `:${e.shortcode}:`)}
+                          aria-label={e.shortcode ? `Insert :${e.shortcode}:` : `Insert ${e.name}`}
+                          title={e.shortcode ? `:${e.shortcode}:` : e.name}
                         >
-                          <img src={e.static_url || e.url} alt="" width={24} height={24} loading="lazy" />
+                          {e.url ? (
+                            <img src={e.url} alt="" width={24} height={24} loading="lazy" />
+                          ) : (
+                            <span class="compose__emoji-char" role="img">{e.char}</span>
+                          )}
                         </button>
                       ))}
                     </div>

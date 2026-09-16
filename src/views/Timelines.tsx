@@ -8,7 +8,7 @@ import { Fragment } from 'preact'
 import type { Status } from '../api/types'
 import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
-import { getCursor, advanceCursor, isUnseen } from '../state/readState'
+import { getSeenTop, raiseSeenTop, isNewer } from '../state/readState'
 import { StatusCard } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
@@ -85,7 +85,7 @@ export function TimelinePage(props: TimelinePageProps) {
   const [nextMaxId, setNextMaxId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [listTitle, setListTitle] = useState<string | null>(null)
-  const [cursor, setCursor] = useState('')
+  const [visitMark, setVisitMark] = useState('')
   const [jumped, setJumped] = useState(false)
   const requestSeq = useRef(0)
 
@@ -108,6 +108,12 @@ export function TimelinePage(props: TimelinePageProps) {
       setItems(page.items)
       setNextMaxId(page.nextMaxId)
       setState('ready')
+      // Raise the seen high-water mark to the newest post of this load; the
+      // PREVIOUS mark (returned) is what this visit's pill/divider compare
+      // against, so a plain reload never counts old posts as unread.
+      if (page.items.length > 0) {
+        setVisitMark(raiseSeenTop(session, key, page.items[0].id))
+      }
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'The timeline could not be loaded.')
@@ -172,41 +178,19 @@ export function TimelinePage(props: TimelinePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
-  // Read-state memory: restore the cursor for this timeline…
+  // Read-state memory: pick up the seen high-water mark for this timeline…
   useEffect(() => {
-    setCursor(getCursor(session, key))
+    setVisitMark(getSeenTop(session, key))
     setJumped(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, session])
-
-  // …and advance it as cards scroll out of view above the viewport.
-  useEffect(() => {
-    let ticking = false
-    const onScroll = () => {
-      if (ticking || !session) return
-      ticking = true
-      requestAnimationFrame(() => {
-        ticking = false
-        let oldestReadId = ''
-        for (const el of document.querySelectorAll<HTMLElement>('[data-status-id]')) {
-          if (el.getBoundingClientRect().bottom < 96) oldestReadId = el.dataset.statusId ?? ''
-          else break
-        }
-        if (oldestReadId && oldestReadId > cursor) {
-          setCursor(advanceCursor(session, key, oldestReadId))
-        }
-      })
-    }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => window.removeEventListener('scroll', onScroll)
-  }, [key, session, cursor])
 
   function jumpToUnseen() {
     setJumped(true)
     if (pending.length > 0) showPending()
     requestAnimationFrame(() => {
       const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-status-id]'))
-      const target = cards.find((el) => isUnseen(el.dataset.statusId ?? '', cursor)) ?? cards[0]
+      const target = cards.find((el) => isNewer(el.dataset.statusId ?? '', visitMark)) ?? cards[0]
       target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
@@ -230,10 +214,10 @@ export function TimelinePage(props: TimelinePageProps) {
 
   const heading = props.kind === 'list' && listTitle ? listTitle : title
 
-  // Read-state: how many posts are newer than the cursor, and where the
-  // read/unread divider falls.
-  const unseenCount = pending.length + items.filter((s) => isUnseen(s.id, cursor)).length
-  const firstSeenIndex = cursor ? items.findIndex((s) => !isUnseen(s.id, cursor)) : -1
+  // Read-state: how many posts arrived since the last timeline load, and
+  // where the new/old divider falls.
+  const unseenCount = pending.length + items.filter((s) => isNewer(s.id, visitMark)).length
+  const firstSeenIndex = visitMark ? items.findIndex((s) => !isNewer(s.id, visitMark)) : -1
   const showPill = unseenCount > 0 && (!jumped || pending.length > 0)
 
   return (
@@ -304,8 +288,8 @@ export function TimelinePage(props: TimelinePageProps) {
           {items.map((s, i) => (
             <Fragment key={s.id}>
               {i === firstSeenIndex && firstSeenIndex > 0 && (
-                <div class="timelines__seen-divider" role="separator" aria-label="Posts above this line are new since you last read this timeline">
-                  <span>new since your last visit</span>
+                <div class="timelines__seen-divider" role="separator" aria-label="Posts above this line are new since your last visit to this timeline">
+                  <span>new posts</span>
                 </div>
               )}
               <StatusCard

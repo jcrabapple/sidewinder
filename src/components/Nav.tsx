@@ -20,6 +20,8 @@ interface NavItem {
 
 const ITEMS: NavItem[] = [
   { href: '/', label: 'Home', icon: 'home' },
+  { href: '/local', label: 'Local', icon: 'users' },
+  { href: '/federated', label: 'Federated', icon: 'globe' },
   { href: '/catchup', label: 'Catch-up', icon: 'inbox' },
   { href: '/notifications', label: 'Notifications', icon: 'bell' },
   { href: '/search', label: 'Search', icon: 'search' },
@@ -115,12 +117,12 @@ export function NavRail() {
   )
 }
 
-const MOBILE: NavItem[] = [
-  ITEMS[0], // home
-  ITEMS[1], // notifications
-  ITEMS[2], // search
-  ITEMS[3], // lists
-]
+// Mobile tabs: a fixed subset of ITEMS, selected by href so that
+// reordering or inserting into ITEMS cannot silently reshuffle the tabs.
+const MOBILE_HREFS = ['/', '/notifications', '/search', '/catchup']
+const MOBILE: NavItem[] = MOBILE_HREFS
+  .map((href) => ITEMS.find((i) => i.href === href))
+  .filter((i): i is NavItem => Boolean(i))
 
 export function MobileTabs() {
   const sess = activeSession.value

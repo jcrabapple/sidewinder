@@ -51,7 +51,7 @@ export class Api {
 
   async request<T>(
     path: string,
-    opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null>; headers?: Record<string, string> } = {},
+    opts: { method?: string; body?: unknown; query?: Record<string, string | number | boolean | undefined | null>; headers?: Record<string, string>; timeoutMs?: number } = {},
   ): Promise<T> {
     const url = new URL(this.base + path)
     if (opts.query) {
@@ -72,7 +72,7 @@ export class Api {
     }
     let res: Response
     try {
-      res = await Api.fetchWithTimeout(url.toString(), { method: opts.method ?? 'GET', headers, body })
+      res = await Api.fetchWithTimeout(url.toString(), { method: opts.method ?? 'GET', headers, body }, opts.timeoutMs)
     } catch (e) {
       if (e instanceof NetworkError) throw e
       throw e
@@ -99,7 +99,7 @@ export class Api {
   /** GET a paginated collection using the Link header's next page. */
   async page<T>(
     path: string,
-    opts: { query?: Record<string, string | number | boolean | undefined | null>; headers?: Record<string, string> } = {},
+    opts: { query?: Record<string, string | number | boolean | undefined | null>; headers?: Record<string, string>; timeoutMs?: number } = {},
   ): Promise<Page<T>> {
     const url = new URL(this.base + path)
     if (opts.query) {
@@ -111,7 +111,7 @@ export class Api {
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`
     let res: Response
     try {
-      res = await Api.fetchWithTimeout(url.toString(), { headers })
+      res = await Api.fetchWithTimeout(url.toString(), { headers }, opts.timeoutMs)
     } catch (e) {
       if (e instanceof NetworkError) throw e
       throw e

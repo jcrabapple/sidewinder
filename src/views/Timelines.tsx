@@ -89,8 +89,11 @@ export function TimelinePage(props: TimelinePageProps) {
     setPending([])
     setNextMaxId(null)
     try {
+      // A freshly-created token's first home timeline can take ~60s server-side
+      // (cold federation lookups), so give timelines a long leash.
       const page = await api.value.page<Status>(endpoint(props), {
         query: { limit: PAGE_SIZE, local: props.kind === 'local' ? true : undefined },
+        timeoutMs: 90000,
       })
       if (seq !== requestSeq.current) return
       setItems(page.items)

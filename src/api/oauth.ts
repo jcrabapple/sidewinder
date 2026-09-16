@@ -40,9 +40,10 @@ export async function getOrCreateClient(base: string): Promise<ClientCredentials
       // fall through to re-registration
     }
   }
+  // GTS 0.22.x types redirect_uris as a single string (Mastodon accepts both).
   const created = await new Api(base).post<ClientCredentials>('/api/v1/apps', {
     client_name: 'Sidewinder',
-    redirect_uris: [location.origin + '/'],
+    redirect_uris: location.origin + '/',
     scopes: SCOPES,
     website: location.origin,
   })

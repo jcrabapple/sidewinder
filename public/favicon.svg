@@ -1,15 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#1d2822"/>
-  <path d="M49 42 A 17 17 0 1 1 15 42 A 12 12 0 0 1 39 42 A 7 7 0 0 1 25 42" fill="none" stroke="#3f8a5f" stroke-width="9.5" stroke-linecap="round"/>
-  <path d="M49 42 A 17 17 0 1 1 15 42 A 12 12 0 0 1 39 42 A 7 7 0 0 1 25 42" fill="none" stroke="#7dd6a0" stroke-width="6" stroke-linecap="round"/>
-  <path d="M49 42 A 17 17 0 1 1 15 42" fill="none" stroke="#b7ead0" stroke-width="2.8" stroke-linecap="round" stroke-dasharray="18 100" stroke-dashoffset="-8"/>
-  <path d="M48.5 43 C 52.5 41.5 54 38 53.5 34.5" fill="none" stroke="#3f8a5f" stroke-width="7" stroke-linecap="round"/>
-  <path d="M48.5 43 C 52.5 41.5 54 38 53.5 34.5" fill="none" stroke="#7dd6a0" stroke-width="4.5" stroke-linecap="round"/>
-  <circle cx="31" cy="17" r="10.5" fill="#7dd6a0" stroke="#3f8a5f" stroke-width="2"/>
-  <circle cx="27" cy="14.5" r="3.2" fill="#fff"/><circle cx="35" cy="14.5" r="3.2" fill="#fff"/>
-  <circle cx="27.7" cy="15.1" r="1.5" fill="#1d2822"/><circle cx="35.7" cy="15.1" r="1.5" fill="#1d2822"/>
-  <circle cx="28.4" cy="13.9" r="0.65" fill="#fff"/><circle cx="36.4" cy="13.9" r="0.65" fill="#fff"/>
-  <ellipse cx="22.5" cy="20.5" rx="1.9" ry="1.3" fill="#ff9aa6"/><ellipse cx="39.5" cy="20.5" rx="1.9" ry="1.3" fill="#ff9aa6"/>
-  <path d="M28 21.5 Q 31 23.8 34 21.5" fill="none" stroke="#2b4a38" stroke-width="1.6" stroke-linecap="round"/>
-  <path d="M31 24 L 31 26.6 M31 26.6 L 29.4 28 M31 26.6 L 32.6 28" fill="none" stroke="#ff7b8a" stroke-width="1.6" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <clipPath id="frame"><rect width="200" height="200" rx="44"/></clipPath>
+  </defs>
+  <rect width="200" height="200" rx="44" fill="#1d2822"/>
+  <circle cx="100" cy="100" r="82" fill="#141414"/>
+  <circle cx="100" cy="100" r="74" fill="#2FA033"/>
+
+  <g transform="translate(100 100) scale(0.93) translate(-100 -100)" clip-path="url(#frame)">
+    <!-- one continuous coiled body: cream tube, black outline -->
+    <path d="M78 45 C58 58 50 82 54 106 C58 130 76 146 98 148 C120 150 136 136 141 116 C145 100 142 86 131 79 C124 75 116 76 112 82"
+      fill="none" stroke="#141414" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M78 45 C58 58 50 82 54 106 C58 130 76 146 98 148 C120 150 136 136 141 116 C145 100 142 86 131 79 C124 75 116 76 112 82"
+      fill="none" stroke="#F7F4EC" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- tail flick: connected to the inner tube end, curling up into the gap -->
+    <path d="M113 80 C116 72 122 68 127 70 C124 72 121 76 120 83 Z" fill="#141414"/>
+
+    <!-- oversized tilted head -->
+    <g transform="rotate(-15 80 42)">
+      <ellipse cx="80" cy="42" rx="30" ry="25.5" fill="#F7F4EC" stroke="#141414" stroke-width="5"/>
+      <path d="M51 36 C53 23 65 18 80 18 C95 18 109 25.5 110 38 C110.5 44 105.5 48.5 98.5 47.5 C92 36.5 82.5 34.5 73 36.5 C66 38 56.5 40 51 36 Z" fill="#C9A265"/>
+      <ellipse cx="80" cy="42" rx="30" ry="25.5" fill="none" stroke="#141414" stroke-width="5"/>
+    </g>
+    <!-- one big glossy eye + nostril -->
+    <circle cx="97" cy="50" r="8" fill="#141414"/>
+    <circle cx="94.2" cy="47.2" r="3.2" fill="#FFFFFF"/>
+    <circle cx="75" cy="51" r="2.2" fill="#141414"/>
+    <!-- mouth + forked tongue -->
+    <path d="M82 66 Q 88 69.5 94.5 65.5" fill="none" stroke="#141414" stroke-width="3.2" stroke-linecap="round"/>
+    <g stroke="#EE8CA6" stroke-width="8" stroke-linecap="round" fill="none">
+      <path d="M87 70 L83.5 83"/>
+      <path d="M83.5 83 L76.5 91.5"/>
+      <path d="M83.5 83 L89 91.5"/>
+    </g>
+  </g>
 </svg>

@@ -62,17 +62,25 @@ const LABELS: Record<string, string> = {
   following: 'people I follow',
   mutuals: 'mutuals',
   mentioned: 'mentioned',
-  author: 'only the author',
+  author: 'the author',
   me: 'you',
   author_uri_fallback: '',
 }
 
-/** Human summary of one rule list, e.g. "followers + mentioned". */
-export function describeRules(rules: PolicyRules | undefined): string {
+/** Human summary of one rule list. Filters server-added boilerplate
+ *  (author, me, and mentioned-on-replies) so the chip states the substance. */
+export function describeRules(rules: PolicyRules | undefined, isReply = false): string {
   if (!rules) return 'anyone'
-  const parts = [...rules.automatic_approval, ...rules.manual_approval.map((v) => `${v} (approval)`)]
-  if (parts.length === 0) return 'anyone'
-  return parts.map((v) => LABELS[v] ?? '').filter(Boolean).join(' + ') || 'restricted'
+  const auto = rules.automatic_approval.filter(
+    (v) => v !== 'author' && v !== 'me' && !(isReply && v === 'mentioned'),
+  )
+  const needsApproval = rules.manual_approval.length > 0
+  const names = auto.map((v) => LABELS[v]).filter(Boolean)
+  if (needsApproval) {
+    return names.length ? `${names.join(' + ')} + approval required` : 'approval required'
+  }
+  if (names.length === 0) return 'only the author'
+  return `${names.join(' + ')} only`
 }
 
 /** Compact per-type summaries for the card chip. Only restricted types. */
@@ -80,14 +88,9 @@ export function policySummaries(status: Status): string[] {
   const p = status.interaction_policy
   if (!p) return []
   const out: string[] = []
-  if (p.can_reply && (!p.can_reply.automatic_approval.includes('public') || p.can_reply.manual_approval.length > 0)) {
-    out.push(`Replies: ${describeRules(p.can_reply)}`)
-  }
-  if (p.can_reblog && (!p.can_reblog.automatic_approval.includes('public') || p.can_reblog.manual_approval.length > 0)) {
-    out.push(`Boosts: ${describeRules(p.can_reblog)}`)
-  }
-  if (p.can_favourite && (!p.can_favourite.automatic_approval.includes('public') || p.can_favourite.manual_approval.length > 0)) {
-    out.push(`Likes: ${describeRules(p.can_favourite)}`)
-  }
+  const restrictive = (r?: PolicyRules) => !!r && (!r.automatic_approval.includes('public') || r.manual_approval.length > 0)
+  if (restrictive(p.can_reply)) out.push(`Replies: ${describeRules(p.can_reply, true)}`)
+  if (restrictive(p.can_reblog)) out.push(`Boosts: ${describeRules(p.can_reblog)}`)
+  if (restrictive(p.can_favourite)) out.push(`Likes: ${describeRules(p.can_favourite)}`)
   return out
 }

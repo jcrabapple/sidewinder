@@ -4,6 +4,7 @@
  */
 import { settings, updateSettings, type ThemePref, type Settings } from '../state/settings'
 import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
+import { keywordMutes, addKeywordMute, removeKeywordMute } from '../state/mutes'
 import { useEffect, useState } from 'preact/hooks'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { Icon } from '../components/Icon'
@@ -28,6 +29,7 @@ export function SettingsView() {
   const s = settings.value
   const session = activeSession.value
   const [seenCount, setSeenCount] = useState<number | null>(null)
+  const [muteDraft, setMuteDraft] = useState('')
 
   // Refresh the cache size readout whenever the toggle flips on.
   useEffect(() => {
@@ -132,6 +134,53 @@ export function SettingsView() {
               Clear history
             </button>
           </div>
+        )}
+      </section>
+
+      <section class="settings__section card" aria-labelledby="settings-mutes">
+        <h2 id="settings-mutes">Keyword mutes</h2>
+        <p class="help-text">
+          Hide posts matching a phrase (matched against post text and content warnings). Entries
+          starting with <code>@</code> mute an account. Mutes are private to this browser and never
+          apply to notifications.
+        </p>
+        <div class="settings__mute-add">
+          <input
+            class="input"
+            value={muteDraft}
+            placeholder="Add a phrase or @account"
+            aria-label="New keyword mute"
+            onInput={(e) => setMuteDraft((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && addKeywordMute(muteDraft)) setMuteDraft('')
+            }}
+          />
+          <button
+            class="btn"
+            onClick={() => {
+              if (addKeywordMute(muteDraft)) setMuteDraft('')
+            }}
+          >
+            Add
+          </button>
+        </div>
+        {keywordMutes.value.length === 0 ? (
+          <p class="help-text">No mutes yet.</p>
+        ) : (
+          <ul class="settings__mute-list">
+            {keywordMutes.value.map((m) => (
+              <li key={m.id} class="settings__mute-row">
+                <span>{m.phrase}</span>
+                <button
+                  class="icon-btn"
+                  aria-label={`Remove mute ${m.phrase}`}
+                  onClick={() => removeKeywordMute(m.id)}
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 

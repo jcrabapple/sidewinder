@@ -12,6 +12,7 @@ import { getSeenTop, raiseSeenTop, isNewer } from '../state/readState'
 import { queueMarkerPush } from '../state/markers'
 import { recordSeenPosts } from '../state/seenPosts'
 import { StatusCard } from '../components/StatusCard'
+import { MutedPost } from '../components/MutedPost'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
 import './Timelines.css'
@@ -303,12 +304,14 @@ export function TimelinePage(props: TimelinePageProps) {
                   <span>new posts</span>
                 </div>
               )}
-              <StatusCard
-                status={s}
-                variant="timeline"
-                onStatusUpdated={onStatusUpdated}
-                onStatusDeleted={onStatusDeleted}
-              />
+              <MutedPost status={s}>
+                <StatusCard
+                  status={s}
+                  variant="timeline"
+                  onStatusUpdated={onStatusUpdated}
+                  onStatusDeleted={onStatusDeleted}
+                />
+              </MutedPost>
             </Fragment>
           ))}
           {error && <p class="error-note" role="alert">{error}</p>}

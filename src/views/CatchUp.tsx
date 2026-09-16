@@ -16,6 +16,7 @@ import type { Status } from '../api/types'
 import type { Page } from '../api/client'
 import { api, activeSession } from '../state/auth'
 import { getSeenTop } from '../state/readState'
+import { muteFor } from '../state/mutes'
 import { replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate } from '../router'
@@ -165,8 +166,11 @@ export function CatchUpView() {
     return [...byOriginal.values()]
   }, [items])
 
+  const mutedCount = useMemo(() => entries.filter((e) => muteFor(e.status) !== null).length, [entries])
+
   const filtered = useMemo(() => {
     const out = entries.filter((e) => {
+      if (muteFor(e.status)) return false
       const boosted = e.boosters.length > 0
       const isReply = Boolean(e.status.in_reply_to_id) && e.status.in_reply_to_account_id !== me
       switch (filter) {
@@ -253,6 +257,7 @@ export function CatchUpView() {
         <p class="catchup__summary">
           {items.length === 1 ? '1 post' : `${items.length} posts`}{' '}
           {useRange ? `from the ${rangeLabel.toLowerCase()}` : 'since your last visit'}
+          {mutedCount > 0 && ` · ${mutedCount} hidden by your keyword mutes`}
         </p>
       )}
 

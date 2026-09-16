@@ -6,8 +6,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Account, AccountCredentials, AccountField, Status } from '../api/types'
 import { api, activeSession, sessions, upsertSession } from '../state/auth'
+import { recordFollowerSnapshot, followerSnapshots, engagement, median } from '../state/insights'
 import { toast } from '../state/toast'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
+import { InsightsPanel } from '../components/Insights'
 import { Icon } from '../components/Icon'
 import { sanitize } from '../util/sanitize'
 import { formatCount, formatAbsoluteShort } from '../util/time'
@@ -52,7 +54,8 @@ export function ProfileView({ id }: { id: string }) {
       if (seq !== requestSeq.current) return
       setAccount(acct)
       setState('ready')
-      if (acct.id !== me) void fetchRelationship(acct.id)
+      if (acct.id === me) recordFollowerSnapshot(acct.followers_count ?? 0)
+      else void fetchRelationship(acct.id)
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'The profile could not be loaded.')
@@ -192,6 +195,8 @@ export function ProfileView({ id }: { id: string }) {
         <span><strong class="num">{formatCount(account.following_count)}</strong> following</span>
         <span><strong class="num">{formatCount(account.followers_count)}</strong> followers</span>
       </div>
+
+      {own && <InsightsPanel accountId={account.id} />}
 
       <div class="profile__tabs" role="tablist" aria-label="Profile timelines">
         {(['posts', 'replies', 'media'] as Tab[]).map((t) => (

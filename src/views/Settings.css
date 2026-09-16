@@ -175,3 +175,35 @@
   font-size: var(--fs-s);
 }
 .settings__about a { color: var(--accent); text-underline-offset: 0.18em; }
+
+/* Keyword mutes */
+.settings__mute-add {
+  display: flex;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+
+.settings__mute-add .input {
+  flex: 1;
+  min-height: 44px;
+}
+
+.settings__mute-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.settings__mute-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}

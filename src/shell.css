@@ -143,6 +143,20 @@ dialog.sw-dialog::backdrop {
     max-width: none;
     max-height: 92dvh;
     border-radius: var(--radius-l) var(--radius-l) 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Sheet drag-handle affordance */
+  dialog.sw-dialog::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border-strong);
   }
 }
 

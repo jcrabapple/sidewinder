@@ -1,0 +1,174 @@
+/* Fediverse Wrapped */
+
+.wrapped__year { width: auto; min-height: 44px; }
+
+.wrapped__intro {
+  margin: 0 0 var(--sp-5);
+  font-size: var(--fs-l);
+  line-height: var(--lh-body);
+  max-width: 60ch;
+}
+
+.wrapped__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+
+.wrapped__body h2 {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-l);
+  letter-spacing: var(--tracking-display);
+}
+
+/* Top-line numbers: one big figure, the rest as a definition list. */
+.wrapped__hero {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-6);
+  flex-wrap: wrap;
+  padding: var(--sp-5) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped__bignum {
+  display: flex;
+  flex-direction: column;
+}
+
+.wrapped__number {
+  font-size: 4rem;
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  line-height: 1;
+  color: var(--accent);
+}
+
+.wrapped__caption {
+  margin-top: var(--sp-1);
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.wrapped__stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  min-width: 220px;
+}
+
+.wrapped__stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  border-bottom: 1px dashed var(--border);
+  padding: var(--sp-1) 0;
+}
+
+.wrapped__stats dt { color: var(--fg-muted); }
+.wrapped__stats dd { margin: 0; font-weight: 650; }
+
+/* Bar charts */
+.wrapped__chart { margin: 0 0 var(--sp-4); }
+
+.wrapped__chart figcaption {
+  margin-top: var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+}
+
+.wrapped__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+}
+
+.wrapped__bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 0;
+}
+
+.wrapped__bar {
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.85;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.wrapped__bar-col:hover .wrapped__bar { opacity: 1; }
+.wrapped__bar[data-empty='true'] { background: var(--surface-3); }
+
+.wrapped__bar-label {
+  display: block;
+  text-align: center;
+  font-size: 10px;
+  color: var(--fg-muted);
+  padding-top: 4px;
+  min-height: 16px;
+  overflow: visible;
+}
+
+/* Ranked lists */
+.wrapped__ranked, .wrapped__people {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 480px;
+}
+
+.wrapped__ranked li, .wrapped__people li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped__ranked a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.wrapped__ranked a:hover { text-decoration: underline; text-underline-offset: 0.18em; }
+
+.wrapped__person {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--fg);
+  text-decoration: none;
+  min-height: 44px;
+  min-width: 0;
+}
+.wrapped__person:hover span { text-decoration: underline; text-underline-offset: 0.18em; }
+
+.wrapped__person img { border-radius: 50%; flex: none; }
+.wrapped__person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wrapped__ranked .num, .wrapped__people .num {
+  color: var(--fg-muted);
+  font-weight: 650;
+}
+
+.wrapped__fact {
+  margin: var(--sp-2) 0 0;
+}
+
+.wrapped__post {
+  padding: var(--sp-4);
+}
+
+.wrapped__footnote {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-4);
+  max-width: 60ch;
+}

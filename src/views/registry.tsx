@@ -6,6 +6,7 @@ import { ProfileView } from './Profile'
 import { SearchView } from './Search'
 import { CollectionsView } from './Collections'
 import { ListsView } from './Lists'
+import { WrappedView } from './Wrapped'
 import { FollowRequestsView } from './FollowRequests'
 import { SettingsView } from './Settings'
 import { navigate } from '../router'
@@ -40,6 +41,8 @@ export function AppRoutes({ route }: { route: Route }) {
       return <CollectionsView kind="bookmarks" />
     case 'follow_requests':
       return <FollowRequestsView />
+    case 'wrapped':
+      return <WrappedView />
     case 'settings':
       return <SettingsView />
     default:

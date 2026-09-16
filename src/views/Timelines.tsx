@@ -4,9 +4,11 @@
  * the streaming client, and a pending-new-items pill instead of jumpy inserts.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { Fragment } from 'preact'
 import type { Status } from '../api/types'
-import { api } from '../state/auth'
+import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
+import { getCursor, advanceCursor, isUnseen } from '../state/readState'
 import { StatusCard } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
@@ -83,9 +85,12 @@ export function TimelinePage(props: TimelinePageProps) {
   const [nextMaxId, setNextMaxId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [listTitle, setListTitle] = useState<string | null>(null)
+  const [cursor, setCursor] = useState('')
+  const [jumped, setJumped] = useState(false)
   const requestSeq = useRef(0)
 
   const key = `${props.kind}:${props.tag ?? ''}:${props.listId ?? ''}`
+  const session = activeSession.value?.id ?? ''
 
   async function loadFirst() {
     const seq = ++requestSeq.current
@@ -167,6 +172,45 @@ export function TimelinePage(props: TimelinePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
+  // Read-state memory: restore the cursor for this timeline…
+  useEffect(() => {
+    setCursor(getCursor(session, key))
+    setJumped(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, session])
+
+  // …and advance it as cards scroll out of view above the viewport.
+  useEffect(() => {
+    let ticking = false
+    const onScroll = () => {
+      if (ticking || !session) return
+      ticking = true
+      requestAnimationFrame(() => {
+        ticking = false
+        let oldestReadId = ''
+        for (const el of document.querySelectorAll<HTMLElement>('[data-status-id]')) {
+          if (el.getBoundingClientRect().bottom < 96) oldestReadId = el.dataset.statusId ?? ''
+          else break
+        }
+        if (oldestReadId && oldestReadId > cursor) {
+          setCursor(advanceCursor(session, key, oldestReadId))
+        }
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [key, session, cursor])
+
+  function jumpToUnseen() {
+    setJumped(true)
+    if (pending.length > 0) showPending()
+    requestAnimationFrame(() => {
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-status-id]'))
+      const target = cards.find((el) => isUnseen(el.dataset.statusId ?? '', cursor)) ?? cards[0]
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
   function showPending() {
     setItems((cur) => {
       const seen = new Set(cur.map((s) => s.id))
@@ -186,6 +230,12 @@ export function TimelinePage(props: TimelinePageProps) {
 
   const heading = props.kind === 'list' && listTitle ? listTitle : title
 
+  // Read-state: how many posts are newer than the cursor, and where the
+  // read/unread divider falls.
+  const unseenCount = pending.length + items.filter((s) => isUnseen(s.id, cursor)).length
+  const firstSeenIndex = cursor ? items.findIndex((s) => !isUnseen(s.id, cursor)) : -1
+  const showPill = unseenCount > 0 && (!jumped || pending.length > 0)
+
   return (
     <div class="timelines">
       <header class="view-header">
@@ -202,10 +252,16 @@ export function TimelinePage(props: TimelinePageProps) {
         </div>
       </header>
 
-      {pending.length > 0 && (
-        <button class="timelines__new-pill rise-in" onClick={showPending}>
+      {showPill && (
+        <button
+          class="timelines__new-pill rise-in"
+          onClick={jumpToUnseen}
+          aria-label={`Jump to ${unseenCount} ${unseenCount === 1 ? 'post' : 'posts'} you haven't read`}
+        >
           <Icon name="arrow-up" size={14} />
-          {pending.length === 1 ? '1 new post' : `${pending.length} new posts`}
+          {pending.length > 0
+            ? pending.length === 1 ? '1 new post — jump' : `${pending.length} new posts — jump`
+            : unseenCount === 1 ? '1 unread post — jump' : `${unseenCount} unread posts — jump`}
         </button>
       )}
 
@@ -245,14 +301,20 @@ export function TimelinePage(props: TimelinePageProps) {
 
       {state === 'ready' && items.length > 0 && (
         <div class="timelines__list" aria-busy={loadingMore}>
-          {items.map((s) => (
-            <StatusCard
-              key={s.id}
-              status={s}
-              variant="timeline"
-              onStatusUpdated={onStatusUpdated}
-              onStatusDeleted={onStatusDeleted}
-            />
+          {items.map((s, i) => (
+            <Fragment key={s.id}>
+              {i === firstSeenIndex && firstSeenIndex > 0 && (
+                <div class="timelines__seen-divider" role="separator" aria-label="Posts above this line are new since you last read this timeline">
+                  <span>new since your last visit</span>
+                </div>
+              )}
+              <StatusCard
+                status={s}
+                variant="timeline"
+                onStatusUpdated={onStatusUpdated}
+                onStatusDeleted={onStatusDeleted}
+              />
+            </Fragment>
           ))}
           {error && <p class="error-note" role="alert">{error}</p>}
           {nextMaxId ? (

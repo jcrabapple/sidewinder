@@ -37,6 +37,27 @@
   margin: var(--sp-4) 0;
 }
 
+/* Read-state divider between unread (above) and read (below). */
+.timelines__seen-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-2) 0;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.timelines__seen-divider::before,
+.timelines__seen-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+/* End-of-list marker */
 .timelines__end {
   margin: var(--sp-5) 0;
   text-align: center;

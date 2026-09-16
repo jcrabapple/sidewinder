@@ -25,6 +25,7 @@ const ITEMS: NavItem[] = [
   { href: '/lists', label: 'Lists', icon: 'list' },
   { href: '/favourites', label: 'Favourites', icon: 'star' },
   { href: '/bookmarks', label: 'Bookmarks', icon: 'bookmark' },
+  { href: '/wrapped', label: 'Wrapped', icon: 'sparkle' },
   { href: '/follow_requests', label: 'Follow requests', icon: 'user-plus', attention: true },
 ]
 

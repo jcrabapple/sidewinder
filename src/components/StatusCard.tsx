@@ -56,6 +56,7 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
   return (
     <article
       class={`status status--${variant}`}
+      data-status-id={status.id}
       aria-label={ariaLabel(status, outer.account, boosted)}
     >
       {boosted && (

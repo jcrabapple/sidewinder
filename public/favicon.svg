@@ -1,36 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-  <defs>
-    <clipPath id="frame"><rect width="200" height="200" rx="44"/></clipPath>
-  </defs>
+  <!-- patch frame -->
   <rect width="200" height="200" rx="44" fill="#1d2822"/>
   <circle cx="100" cy="100" r="82" fill="#141414"/>
   <circle cx="100" cy="100" r="74" fill="#2FA033"/>
 
-  <g transform="translate(100 100) scale(0.93) translate(-100 -100)" clip-path="url(#frame)">
-    <!-- one continuous coiled body: cream tube, black outline -->
-    <path d="M78 45 C58 58 50 82 54 106 C58 130 76 146 98 148 C120 150 136 136 141 116 C145 100 142 86 131 79 C124 75 116 76 112 82"
-      fill="none" stroke="#141414" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M78 45 C58 58 50 82 54 106 C58 130 76 146 98 148 C120 150 136 136 141 116 C145 100 142 86 131 79 C124 75 116 76 112 82"
-      fill="none" stroke="#F7F4EC" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- tail flick: connected to the inner tube end, curling up into the gap -->
-    <path d="M113 80 C116 72 122 68 127 70 C124 72 121 76 120 83 Z" fill="#141414"/>
+  <!-- coiled body: black outline pass, then tan color pass -->
+  <path d="M 78 78 A 44 44 0 1 0 149 104 C 147 88 136 76 122 76 C 111 76 103 83 101 93"
+        fill="none" stroke="#141414" stroke-width="27" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 78 78 A 44 44 0 1 0 149 104 C 147 88 136 76 122 76 C 111 76 103 83 101 93"
+        fill="none" stroke="#C9A265" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- oversized tilted head -->
-    <g transform="rotate(-15 80 42)">
-      <ellipse cx="80" cy="42" rx="30" ry="25.5" fill="#F7F4EC" stroke="#141414" stroke-width="5"/>
-      <path d="M51 36 C53 23 65 18 80 18 C95 18 109 25.5 110 38 C110.5 44 105.5 48.5 98.5 47.5 C92 36.5 82.5 34.5 73 36.5 C66 38 56.5 40 51 36 Z" fill="#C9A265"/>
-      <ellipse cx="80" cy="42" rx="30" ry="25.5" fill="none" stroke="#141414" stroke-width="5"/>
-    </g>
-    <!-- one big glossy eye + nostril -->
-    <circle cx="97" cy="50" r="8" fill="#141414"/>
-    <circle cx="94.2" cy="47.2" r="3.2" fill="#FFFFFF"/>
-    <circle cx="75" cy="51" r="2.2" fill="#141414"/>
-    <!-- mouth + forked tongue -->
-    <path d="M82 66 Q 88 69.5 94.5 65.5" fill="none" stroke="#141414" stroke-width="3.2" stroke-linecap="round"/>
-    <g stroke="#EE8CA6" stroke-width="8" stroke-linecap="round" fill="none">
-      <path d="M87 70 L83.5 83"/>
-      <path d="M83.5 83 L76.5 91.5"/>
-      <path d="M83.5 83 L89 91.5"/>
-    </g>
+  <!-- black tail flick at inner end -->
+  <path d="M 97 88 C 103 95 107 103 109 113 C 101.5 107.5 97.5 100.5 95.5 94 Z" fill="#141414"/>
+
+  <!-- head, tilted -20°, tucked over the coil start -->
+  <g transform="translate(70 66) rotate(-20)">
+    <!-- head outline blob -->
+    <ellipse cx="0" cy="0" rx="24.5" ry="20.5" fill="#141414"/>
+    <!-- tan dome -->
+    <path d="M -20.5 3 A 20 16 0 1 1 20.5 3 Q 0 10 -20.5 3 Z" fill="#C9A265"/>
+    <!-- cream jaw -->
+    <path d="M -20.5 3 Q 0 10 20.5 3 A 20 16 0 0 1 -20.5 3 Z" fill="#F2E3C6"/>
+    <!-- mouth seam -->
+    <path d="M -20.5 3 Q 0 10 20.5 3" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>
+    <!-- forked tongue: outline then pink -->
+    <path d="M -18 5 C -21 11 -22 14 -22 17 M -22 17 L -27 23 M -22 17 L -18 24"
+          fill="none" stroke="#141414" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M -18 5 C -21 11 -22 14 -22 17 M -22 17 L -27 23 M -22 17 L -18 24"
+          fill="none" stroke="#E86A8A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- one big glossy eye -->
+    <circle cx="4" cy="-6" r="7" fill="#141414"/>
+    <circle cx="1.5" cy="-8.5" r="2.3" fill="#ffffff"/>
+    <!-- nostril -->
+    <circle cx="-13" cy="0.5" r="1.5" fill="#141414"/>
   </g>
 </svg>

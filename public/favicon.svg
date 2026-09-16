@@ -16,5 +16,5 @@
   <ellipse cx="23.5" cy="39.5" rx="2.1" ry="1.4" fill="#ff9aa6"/>
   <ellipse cx="40.5" cy="39.5" rx="2.1" ry="1.4" fill="#ff9aa6"/>
   <path d="M28 41.5 Q 32 44.5 36 41.5" fill="none" stroke="#2b4a38" stroke-width="1.8" stroke-linecap="round"/>
-  <path d="M32 44.2 L 32 47.5 M32 47.5 L 30 49.5 M32 47.5 L 34 49.5" fill="none" stroke="#ff7b8a" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M32 44.2 L 32 46.8 M32 46.8 L 30.4 48.2 M32 46.8 L 33.6 48.2" fill="none" stroke="#ff7b8a" stroke-width="1.8" stroke-linecap="round"/>
 </svg>

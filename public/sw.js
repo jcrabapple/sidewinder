@@ -119,7 +119,10 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const id = (event.notification.data && event.notification.data.id) || null
-  const url = self.location.origin + '/#' + (id ? `/statuses/${id}` : '/notifications')
+  // Land on the notifications list with the id; the app resolves it to the
+  // post thread (or highlights the row) — a notification id is not a
+  // status id, so deep-linking #/statuses directly 404s.
+  const url = self.location.origin + '/#/notifications' + (id ? `?n=${id}` : '')
   event.waitUntil(
     self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })

@@ -12,7 +12,7 @@ import { refreshFollowRequestCount } from '../state/notifications'
 import { queueMarkerPush, syncMarkersFromServer } from '../state/markers'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
-import { useTitle, navigate } from '../router'
+import { useTitle, navigate, route } from '../router'
 import { formatRelative, formatAbsolute } from '../util/time'
 import './Notifications.css'
 
@@ -148,6 +148,42 @@ export function NotificationsView() {
   const [loadingMore, setLoadingMore] = useState(false)
   const requestSeq = useRef(0)
 
+  // Push deep-link: tapping a notification lands here with ?n=<notification
+  // id>. Resolve it to the post thread (status-bearing types) or highlight
+  // the row; if it's older than the first page, page deeper to find it.
+  const jumpId = useRef<string | null>(route.value.query.get('n'))
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+
+  async function resolveJump(list: Notification[], moreId: string | null, depth = 0): Promise<void> {
+    const id = jumpId.current
+    if (!id) return
+    const found = list.find((x) => x.id === id)
+    if (!found) {
+      if (moreId && depth < 2) {
+        const page = await api.value.page<Notification>(endpoint('all', moreId))
+        setItems((cur) => {
+          const seen = new Set(cur.map((x) => x.id))
+          return [...cur, ...page.items.filter((x) => !seen.has(x.id))]
+        })
+        setNextMaxId(page.nextMaxId)
+        await resolveJump([...list, ...page.items], page.nextMaxId, depth + 1)
+        return
+      }
+      jumpId.current = null
+      return
+    }
+    jumpId.current = null
+    const STATUS_TYPES = ['mention', 'status', 'poll', 'update', 'favourite', 'reblog']
+    if (found.status && STATUS_TYPES.includes(found.type)) {
+      navigate(`/statuses/${found.status.id}`)
+      return
+    }
+    setHighlightId(id)
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-notification-id="${id}"]`)?.scrollIntoView({ block: 'center' })
+    })
+  }
+
   async function loadFirst(f: Filter) {
     const seq = ++requestSeq.current
     setState('loading')
@@ -161,6 +197,7 @@ export function NotificationsView() {
       setItems(page.items)
       setNextMaxId(page.nextMaxId)
       setState('ready')
+      void resolveJump(page.items, page.nextMaxId)
       // Newest loaded notification is read by definition → push the marker.
       // Push the notifications marker only for the unfiltered view: the
       // newest item of a filtered view is not "the newest read
@@ -318,6 +355,7 @@ export function NotificationsView() {
               <NotificationRow
                 key={e.notification.id}
                 notification={e.notification}
+                highlighted={highlightId === e.notification.id}
                 onStatusUpdated={onStatusUpdated}
                 onStatusDeleted={onStatusDeleted}
               />
@@ -424,10 +462,12 @@ function GroupedRow({
 
 function NotificationRow({
   notification: n,
+  highlighted,
   onStatusUpdated,
   onStatusDeleted,
 }: {
   notification: Notification
+  highlighted?: boolean
   onStatusUpdated: (s: Status) => void
   onStatusDeleted: (id: string) => void
 }) {
@@ -436,7 +476,11 @@ function NotificationRow({
   const name = account ? account.display_name || account.username : 'Someone'
 
   return (
-    <article class="notifications__item" aria-label={`${name} ${kind.text}`}>
+    <article
+      class={`notifications__item${highlighted ? ' notifications__item--highlight' : ''}`}
+      data-notification-id={n.id}
+      aria-label={`${name} ${kind.text}`}
+    >
       <div class="notifications__line">
         <span class={`notifications__badge ${kind.cls}`} aria-hidden="true">
           <Icon name={kind.icon} size={16} />

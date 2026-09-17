@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Status } from '../api/types'
 import { api } from '../state/auth'
+import { lastPosted } from '../state/compose'
 import { StatusCard } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate } from '../router'
@@ -68,6 +69,25 @@ export function ThreadView({ id }: { id: string }) {
     setDescendants((cur) => cur.filter((it) => it.id !== deletedId))
     if (status?.id === deletedId) navigate('/', { replace: true })
   }
+
+  // A reply posted from the composer appears immediately: when the new
+  // status's parent is part of this thread, append it to the descendants.
+  useEffect(() => {
+    const created = lastPosted.value
+    if (!created || state !== 'ready' || !status) return
+    const inner = created.reblog ?? created
+    const parentId = inner.in_reply_to_id
+    if (!parentId) return
+    const inThread =
+      parentId === status.id ||
+      ancestors.some((a) => a.id === parentId) ||
+      descendants.some((d) => d.id === parentId)
+    if (!inThread) return
+    setDescendants((cur) =>
+      cur.some((d) => d.id === inner.id) ? cur.map((d) => (d.id === inner.id ? inner : d)) : [...cur, inner],
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastPosted.value])
 
   /** Depth-first ordered descendants with nesting depth per status. */
   function orderedReplies(): { status: Status; depth: number }[] {

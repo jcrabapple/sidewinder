@@ -13,6 +13,9 @@ export interface ComposeContext {
 
 export const composeOpen = signal(false)
 export const composeContext = signal<ComposeContext | null>(null)
+/** The most recently created status — views (e.g. Thread) react to this to
+ *  show new replies immediately without a refetch. */
+export const lastPosted = signal<Status | null>(null)
 
 export function openCompose(ctx: ComposeContext | null = null) {
   composeContext.value = ctx

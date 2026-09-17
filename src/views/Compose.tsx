@@ -4,7 +4,7 @@
  * picker. Opened via openCompose() from state/compose.ts.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { composeOpen, composeContext, closeCompose } from '../state/compose'
+import { composeOpen, composeContext, closeCompose, lastPosted } from '../state/compose'
 import { api } from '../state/auth'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
@@ -319,11 +319,12 @@ export function ComposeHost() {
         await api.value.put<Status>(`/api/v1/statuses/${editing.id}`, body)
         toast('Post updated')
       } else {
-        await api.value.request<Status>('/api/v1/statuses', {
+        const created = await api.value.request<Status>('/api/v1/statuses', {
           method: 'POST',
           body,
           headers: { 'Idempotency-Key': crypto.randomUUID() },
         })
+        lastPosted.value = created
         toast('Posted')
       }
       close()

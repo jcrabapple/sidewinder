@@ -40,6 +40,36 @@ export function setSeenTop(session: string, timeline: string, id: string): void 
   }
 }
 
+/**
+ * Absence-aware read marking: a timeline load right after the user was
+ * actively using the app means they're reading now (raise the mark), but
+ * the FIRST load after an absence (no interaction for ABSENCE_MS) is the
+ * "just came back" moment — raising then would mark away-posts as read
+ * before the user has seen them, emptying Catch-up. So:
+ *
+ *   - touchActivity(): heartbeat, called on app open + user interaction.
+ *   - wasRecentlyActive(): true when a load counts as active reading.
+ */
+const ACTIVITY_KEY = 'sidewinder.lastActive'
+export const ABSENCE_MS = 5 * 60_000
+
+export function touchActivity(): void {
+  try {
+    localStorage.setItem(ACTIVITY_KEY, String(Date.now()))
+  } catch {
+    // Blocked storage: every load then counts as active (safe default).
+  }
+}
+
+export function wasRecentlyActive(): boolean {
+  try {
+    const last = Number(localStorage.getItem(ACTIVITY_KEY) ?? '0')
+    return last > 0 && Date.now() - last < ABSENCE_MS
+  } catch {
+    return true
+  }
+}
+
 /** Unseen = strictly newer than the mark. Empty mark means "nothing to catch up on yet". */
 export function isNewer(id: string, seenTop: string): boolean {
   return seenTop !== '' && id > seenTop

@@ -8,7 +8,7 @@ import { Fragment } from 'preact'
 import type { Status } from '../api/types'
 import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
-import { getSeenTop, raiseSeenTop, isNewer } from '../state/readState'
+import { getSeenTop, raiseSeenTop, isNewer, wasRecentlyActive, touchActivity } from '../state/readState'
 import { queueMarkerPush } from '../state/markers'
 import { recordSeenPosts } from '../state/seenPosts'
 import { StatusCard } from '../components/StatusCard'
@@ -115,15 +115,23 @@ export function TimelinePage(props: TimelinePageProps) {
       // PREVIOUS mark (returned) is what this visit's pill/divider compare
       // against, so a plain reload never counts old posts as unread.
       if (page.items.length > 0) {
-        const prev = raiseSeenTop(session, key, page.items[0].id)
+        // Absence-aware read marking: the first load after 5+ minutes away
+        // is "just came back" — it must NOT mark away-posts as read (that
+        // is exactly the Catch-up set). Only loads while actively using the
+        // app raise the mark.
+        const fresh = wasRecentlyActive()
+        touchActivity()
+        const prev = fresh
+          ? raiseSeenTop(session, key, page.items[0].id)
+          : getSeenTop(session, key)
         setVisitMark(prev)
-        void recordSeenPosts(page.items)
         // Push only when the mark actually ROSE (items[0] newer than prev).
         // `prev !== id` would also fire on a shrunk timeline (posts deleted
         // above the mark), regressing the server marker.
-        if (props.kind === 'home' && page.items[0].id > prev) {
+        if (props.kind === 'home' && fresh && page.items[0].id > prev) {
           queueMarkerPush('home', page.items[0].id)
         }
+        void recordSeenPosts(page.items)
       }
     } catch (e) {
       if (seq !== requestSeq.current) return

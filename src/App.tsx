@@ -1,5 +1,6 @@
 import { useEffect } from 'preact/hooks'
 import { activeSession, activeId } from './state/auth'
+import { touchActivity } from './state/readState'
 import { route, startRouter, navigate } from './router'
 import { StartView, consumeOAuthReturn } from './views/Start'
 import { NavRail, MobileTabs, MobileFab } from './components/Nav'
@@ -30,6 +31,27 @@ export function App() {
   useEffect(() => {
     if (sessionId) void syncMarkersFromServer()
   }, [sessionId])
+
+  // Activity heartbeat for absence-aware read marking (see readState.ts):
+  // user interaction keeps the session "fresh"; after ABSENCE_MS of none,
+  // the next timeline load counts as returning and stops marking posts read.
+  useEffect(() => {
+    touchActivity()
+    let last = 0
+    const beat = () => {
+      const now = Date.now()
+      if (now - last > 10_000) {
+        last = now
+        touchActivity()
+      }
+    }
+    const opts = { passive: true, capture: true } as AddEventListenerOptions
+    const events = ['click', 'keydown', 'scroll', 'touchstart'] as const
+    for (const ev of events) window.addEventListener(ev, beat, opts)
+    return () => {
+      for (const ev of events) window.removeEventListener(ev, beat, opts)
+    }
+  }, [])
 
   // Global must-haves: 'n' opens compose, '/' jumps to search.
   useEffect(() => {

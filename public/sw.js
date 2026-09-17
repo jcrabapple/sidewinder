@@ -3,6 +3,7 @@
  * - Static build assets (hashed by Vite): cache-first.
  * - Navigations: network-first with a cached-app-shell fallback for offline.
  * - API and streaming traffic is never intercepted.
+ * - Web push notifications (GoToSocial push API).
  */
 const VERSION = 'v1'
 const STATIC_CACHE = `sidewinder-static-${VERSION}`
@@ -89,5 +90,47 @@ self.addEventListener('fetch', (event) => {
         .catch(() => hit)
       return hit ?? fresh
     }),
+  )
+})
+
+/* ---------- Web push notifications (GoToSocial push API) ---------- */
+
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = { title: 'Sidewinder', body: event.data ? event.data.text() : '' }
+  }
+  const title = data.title || 'Sidewinder'
+  const id = data.notification_id || null
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: data.icon || '/favicon.png',
+      badge: '/favicon.png',
+      tag: id ? `sidewinder-${id}` : 'sidewinder',
+      renotify: Boolean(id),
+      data: { id },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const id = (event.notification.data && event.notification.data.id) || null
+  const url = self.location.origin + '/#' + (id ? `/statuses/${id}` : '/notifications')
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        for (const client of clientList) {
+          if (client.url.startsWith(self.location.origin) && 'navigate' in client) {
+            client.navigate(url)
+            return client.focus()
+          }
+        }
+        return self.clients.openWindow(url)
+      }),
   )
 })

@@ -5,9 +5,11 @@
 import { settings, updateSettings, type ThemePref, type Settings } from '../state/settings'
 import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
 import { keywordMutes, addKeywordMute, removeKeywordMute } from '../state/mutes'
+import { pushState, pushAlerts, initPushState, enablePush, disablePush, setPushAlert } from '../state/push'
 import { useEffect, useState } from 'preact/hooks'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { Icon } from '../components/Icon'
+import { toast } from '../state/toast'
 import { useTitle, navigate } from '../router'
 import './Settings.css'
 
@@ -30,6 +32,10 @@ export function SettingsView() {
   const session = activeSession.value
   const [seenCount, setSeenCount] = useState<number | null>(null)
   const [muteDraft, setMuteDraft] = useState('')
+
+  useEffect(() => {
+    void initPushState()
+  }, [])
 
   // Refresh the cache size readout whenever the toggle flips on.
   useEffect(() => {
@@ -181,6 +187,62 @@ export function SettingsView() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section class="settings__section card" aria-labelledby="settings-push">
+        <h2 id="settings-push">Push notifications</h2>
+        {pushState.value === 'checking' && <p class="help-text">Checking push support…</p>}
+        {pushState.value === 'unsupported' && (
+          <p class="help-text">
+            Push isn't available here: it needs an installed app (or HTTPS site), a browser with
+            push support, and an instance with notifications enabled.
+          </p>
+        )}
+        {pushState.value === 'denied' && (
+          <p class="help-text" role="alert">
+            Notification permission was denied for this site. Re-enable it in your browser's site
+            settings, then reload.
+          </p>
+        )}
+        {pushState.value === 'unsubscribed' && (
+          <>
+            <p class="help-text">
+              Get notified of mentions and other activity even when Sidewinder is closed. Handled
+              entirely between your browser and your instance — no third-party service.
+            </p>
+            <button
+              class="btn btn--primary"
+              onClick={() => {
+                void enablePush()
+                  .then(() => toast('Push notifications enabled'))
+                  .catch((e: unknown) => {
+                    toast(e instanceof Error ? e.message : 'Could not enable push.', 'error')
+                    void initPushState()
+                  })
+              }}
+            >
+              Enable push notifications
+            </button>
+          </>
+        )}
+        {pushState.value === 'subscribed' && (
+          <>
+            <p class="help-text">
+              Subscribed. Pick what reaches you — tap a notification to open it in Sidewinder.
+            </p>
+            <div class="settings__push-alerts" role="group" aria-label="Push notification types">
+              <Toggle label="Mentions" checked={pushAlerts.value.mention} onChange={(v) => setPushAlert({ mention: v })} />
+              <Toggle label="New followers" checked={pushAlerts.value.follow} onChange={(v) => setPushAlert({ follow: v })} />
+              <Toggle label="Boosts" checked={pushAlerts.value.reblog} onChange={(v) => setPushAlert({ reblog: v })} />
+              <Toggle label="Favourites" checked={pushAlerts.value.favourite} onChange={(v) => setPushAlert({ favourite: v })} />
+              <Toggle label="Polls you voted in" checked={pushAlerts.value.poll} onChange={(v) => setPushAlert({ poll: v })} />
+              <Toggle label="Edited posts" checked={pushAlerts.value.update} onChange={(v) => setPushAlert({ update: v })} />
+            </div>
+            <button class="btn btn--danger" onClick={() => void disablePush()}>
+              Disable push notifications
+            </button>
+          </>
         )}
       </section>
 

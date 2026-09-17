@@ -195,3 +195,18 @@
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
 }
+
+/* Tappable cards (timeline + compact): pointer signals open-in-thread */
+.status--timeline,
+.status--compact {
+  cursor: pointer;
+}
+
+.status--timeline a,
+.status--timeline button,
+.status--compact a,
+.status--compact button,
+.status--timeline input,
+.status--compact input {
+  cursor: pointer;
+}

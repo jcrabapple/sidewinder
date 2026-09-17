@@ -59,6 +59,16 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
       class={`status status--${variant}`}
       data-status-id={status.id}
       aria-label={ariaLabel(status, outer.account, boosted)}
+      // Tap the post body to open the thread. Interactive descendants
+      // (links, action buttons, polls, media) keep their own behavior.
+      onClick={
+        variant === 'timeline' || variant === 'compact'
+          ? (e: MouseEvent) => {
+              if ((e.target as Element).closest('a, button, input, select, textarea, label, [role="menu"]')) return
+              navigate(`/statuses/${status.id}`)
+            }
+          : undefined
+      }
     >
       {boosted && (
         <div class="status__boost-line">

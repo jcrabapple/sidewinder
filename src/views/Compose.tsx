@@ -5,7 +5,8 @@
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { composeOpen, composeContext, closeCompose, lastPosted } from '../state/compose'
-import { api } from '../state/auth'
+import { saveDraft, loadDraft, clearDraft } from '../state/draft'
+import { api, activeSession } from '../state/auth'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
 import { customEmojis, emojisStatus, ensureEmojis, loadEmojiSet, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
@@ -117,6 +118,7 @@ function stripTags(html: string): string {
 export function ComposeHost() {
   const open = composeOpen.value
   const ctx = composeContext.value
+  const sessionId = activeSession.value?.id ?? ''
   const dlgRef = useRef<HTMLDialogElement>(null)
   const textRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -144,6 +146,33 @@ export function ComposeHost() {
 
   const editing = ctx?.editing
   const replyTo = ctx?.replyTo
+
+  // Debounced draft autosave: new-post drafts persist per account so a
+  // crash or accidental dismissal never loses a half-written post.
+  useEffect(() => {
+    if (!open || !sessionId || editing || replyTo) return
+    const t = setTimeout(() => {
+      const hasContent = text.trim().length > 0 || media.length > 0 || (pollOn && pollOptions.some((o) => o.trim()))
+      if (!hasContent) {
+        clearDraft(sessionId)
+        return
+      }
+      saveDraft(sessionId, {
+        text,
+        cw,
+        spoiler: cw ? spoiler : '',
+        visibility,
+        media: media.map((m) => ({ attachment: m.attachment, uploading: false })),
+        pollOn,
+        pollOptions,
+        pollMultiple,
+        pollExpiry,
+        savedAt: Date.now(),
+      })
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sessionId, editing, replyTo, text, cw, spoiler, visibility, media, pollOn, pollOptions, pollMultiple, pollExpiry])
 
   // Sync native <dialog> with the composeOpen signal.
   useEffect(() => {
@@ -189,6 +218,22 @@ export function ComposeHost() {
         ? replyTo.visibility
         : settings.value.defaultVisibility,
     )
+    // Draft recovery: a fresh new-post composer restores the saved draft.
+    if (!editing && !replyTo) {
+      const saved = loadDraft(sessionId)
+      if (saved && (saved.text.trim() || saved.media.length > 0 || saved.pollOn)) {
+        setText(saved.text)
+        setCw(saved.cw)
+        setSpoiler(saved.spoiler)
+        setVisibility(saved.visibility as Visibility)
+        setMedia((saved.media ?? []).map((m) => ({ attachment: m.attachment, uploading: false })))
+        setPollOn(saved.pollOn)
+        setPollOptions(saved.pollOptions ?? ['', ''])
+        setPollMultiple(Boolean(saved.pollMultiple))
+        setPollExpiry(saved.pollExpiry ?? 86400)
+        toast('Draft restored')
+      }
+    }
     void fetchLimits().then(setLimits)
     void ensureEmojis()
     void loadEmojiSet()
@@ -325,6 +370,7 @@ export function ComposeHost() {
           headers: { 'Idempotency-Key': crypto.randomUUID() },
         })
         lastPosted.value = created
+        clearDraft(sessionId)
         toast('Posted')
       }
       close()

@@ -68,3 +68,17 @@ export const blockAccount = (id: string) => act(id, 'block', 'Could not block th
 export const unblockAccount = (id: string) => act(id, 'unblock', 'Could not unblock that account.')
 export const muteAccount = (id: string) => act(id, 'mute', 'Could not mute that account.')
 export const unmuteAccount = (id: string) => act(id, 'unmute', 'Could not unmute that account.')
+
+export async function updateAccountNote(id: string, comment: string): Promise<Relationship | null> {
+  try {
+    const rel = await api.value.post<Relationship>(
+      `/api/v1/accounts/${encodeURIComponent(id)}/note`,
+      { comment },
+    )
+    merge([rel])
+    return rel
+  } catch (e) {
+    toast(e instanceof Error ? e.message : 'Could not save private note.', 'error')
+    return null
+  }
+}

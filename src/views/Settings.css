@@ -208,6 +208,20 @@
   border-radius: var(--radius-s);
 }
 
+.settings__booster-link {
+  color: var(--fg);
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings__booster-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
 /* Push notification alert toggles */
 .settings__push-alerts {
   display: flex;

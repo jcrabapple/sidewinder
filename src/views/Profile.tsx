@@ -23,6 +23,7 @@ import {
   unblockAccount,
   muteAccount,
   unmuteAccount,
+  updateAccountNote,
 } from '../state/relationships'
 import { isHiddenBooster, toggleHiddenBooster } from '../state/hideBoosts'
 import './Profile.css'
@@ -173,6 +174,10 @@ export function ProfileView({ id }: { id: string }) {
           {rel?.followed_by && <span class="profile__badge">Follows you</span>}
         </p>
       </div>
+
+      {!own && rel && (
+        <PrivateNote id={account.id} note={rel.note ?? ''} />
+      )}
 
       {account.note && sanitize(account.note, api.value.base).trim() !== '' && (
         <div
@@ -339,6 +344,91 @@ function RelationshipActions({ id, acct }: { id: string; acct: string }) {
         <Icon name="shield" size={18} />
       </button>
     </>
+  )
+}
+
+function PrivateNote({ id, note }: { id: string; note: string }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(note)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setDraft(note)
+  }, [note])
+
+  async function save(e: Event) {
+    e.preventDefault()
+    if (saving) return
+    setSaving(true)
+    const trimmed = draft.trim()
+    const res = await updateAccountNote(id, trimmed)
+    setSaving(false)
+    if (res) {
+      setEditing(false)
+      toast(trimmed ? 'Private note saved' : 'Private note cleared')
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div class="profile__note-bar">
+        {note ? (
+          <div class="profile__note card">
+            <div class="profile__note-head">
+              <span class="profile__note-label">
+                <Icon name="lock" size={12} /> Private note
+              </span>
+              <button
+                class="icon-btn profile__note-edit"
+                aria-label="Edit private note"
+                title="Edit private note"
+                onClick={() => setEditing(true)}
+              >
+                <Icon name="pencil" size={14} />
+              </button>
+            </div>
+            <p class="profile__note-text">{note}</p>
+          </div>
+        ) : (
+          <button class="btn profile__note-add" onClick={() => setEditing(true)}>
+            <Icon name="pencil" size={14} /> Add private note
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <form class="profile__note-form card" onSubmit={(e) => void save(e)}>
+      <label class="label" for={`private-note-${id}`}>
+        Private note (only visible to you)
+      </label>
+      <textarea
+        id={`private-note-${id}`}
+        class="textarea"
+        rows={2}
+        maxLength={2000}
+        value={draft}
+        placeholder="Add context about this account"
+        onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
+      />
+      <div class="profile__note-actions">
+        <button class="btn btn--primary" type="submit" disabled={saving}>
+          {saving ? 'Saving…' : 'Save note'}
+        </button>
+        <button
+          class="btn"
+          type="button"
+          disabled={saving}
+          onClick={() => {
+            setDraft(note)
+            setEditing(false)
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 

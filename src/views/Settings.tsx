@@ -5,9 +5,11 @@
 import { settings, updateSettings, type ThemePref, type Settings } from '../state/settings'
 import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
 import { keywordMutes, addKeywordMute, removeKeywordMute } from '../state/mutes'
+import { hiddenBoosters, toggleHiddenBooster } from '../state/hideBoosts'
 import { pushState, pushAlerts, initPushState, enablePush, disablePush, setPushAlert, testNotification } from '../state/push'
 import { useEffect, useState } from 'preact/hooks'
-import { activeSession, sessions, switchAccount, logout } from '../state/auth'
+import type { Account } from '../api/types'
+import { api, activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { Icon } from '../components/Icon'
 import { toast } from '../state/toast'
 import { useTitle, navigate } from '../router'
@@ -180,6 +182,7 @@ export function SettingsView() {
                 <button
                   class="icon-btn"
                   aria-label={`Remove mute ${m.phrase}`}
+                  title={`Remove mute ${m.phrase}`}
                   onClick={() => removeKeywordMute(m.id)}
                 >
                   <Icon name="x" size={16} />
@@ -189,6 +192,8 @@ export function SettingsView() {
           </ul>
         )}
       </section>
+
+      <HiddenBoostersSection />
 
       <section class="settings__section card" aria-labelledby="settings-push">
         <h2 id="settings-push">Push notifications</h2>
@@ -334,6 +339,73 @@ export function SettingsView() {
         </p>
       </section>
     </div>
+  )
+}
+
+function HiddenBoostersSection() {
+  const ids = [...hiddenBoosters.value]
+  const [accounts, setAccounts] = useState<Record<string, Account>>({})
+
+  useEffect(() => {
+    let alive = true
+    for (const id of ids) {
+      if (accounts[id]) continue
+      api.value
+        .get<Account>(`/api/v1/accounts/${encodeURIComponent(id)}`)
+        .then((acct) => {
+          if (alive) setAccounts((cur) => ({ ...cur, [id]: acct }))
+        })
+        .catch(() => {})
+    }
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join(',')])
+
+  return (
+    <section class="settings__section card" aria-labelledby="settings-hidden-boosts">
+      <h2 id="settings-hidden-boosts">Hidden boosts</h2>
+      <p class="help-text">
+        Accounts whose boosts are hidden from your timelines and Catch-up digest. Toggle this on any
+        profile page next to Mute and Block.
+      </p>
+      {ids.length === 0 ? (
+        <p class="help-text">Not hiding boosts from anyone.</p>
+      ) : (
+        <ul class="settings__mute-list">
+          {ids.map((id) => {
+            const acct = accounts[id]
+            const label = acct ? `@${acct.acct}` : id
+            return (
+              <li key={id} class="settings__mute-row">
+                <a class="settings__booster-link" href={`#/accounts/${encodeURIComponent(id)}`}>
+                  {acct ? (
+                    <>
+                      <strong>{acct.display_name || acct.username}</strong>{' '}
+                      <span class="help-text">@{acct.acct}</span>
+                    </>
+                  ) : (
+                    <span>{id}</span>
+                  )}
+                </a>
+                <button
+                  class="icon-btn"
+                  aria-label={`Show boosts from ${label}`}
+                  title={`Show boosts from ${label}`}
+                  onClick={() => {
+                    toggleHiddenBooster(id, false)
+                    toast(`Boosts from ${label} are visible again`)
+                  }}
+                >
+                  <Icon name="x" size={16} />
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
   )
 }
 

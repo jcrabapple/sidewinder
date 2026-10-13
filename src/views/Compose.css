@@ -1,5 +1,10 @@
 /* Compose dialog layout: text area, attachments, poll, toolbar, emoji picker. */
 
+.compose.compose--dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
 .compose__body form {
   display: flex;
   flex-direction: column;

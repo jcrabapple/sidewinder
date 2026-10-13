@@ -4,7 +4,7 @@
  * shortcodes, in-app link routing, and the full action bar.
  */
 import { useState } from 'preact/hooks'
-import type { Status, Emoji, MediaAttachment } from '../api/types'
+import type { Status, Emoji, MediaAttachment, PreviewCard } from '../api/types'
 import { sanitize } from '../util/sanitize'
 import { formatCompact, formatAbsolute } from '../util/time'
 import { formatCount } from '../util/time'
@@ -220,9 +220,53 @@ function StatusBody({ status, variant, onUpdated }: { status: Status; variant: S
           {hasPoll && status.poll && (
             <Poll poll={status.poll} onPollUpdated={(p) => onUpdated({ ...status, poll: p })} />
           )}
+          {!hasMedia && !hasPoll && status.card && variant !== 'compact' && (
+            <LinkCard card={status.card} />
+          )}
         </>
       )}
     </div>
+  )
+}
+
+function LinkCard({ card }: { card: PreviewCard }) {
+  if (!card.url || !card.title) return null
+  let host = ''
+  try {
+    const parsed = new URL(card.url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    host = parsed.hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+  const provider = card.provider_name?.trim() || host
+
+  return (
+    <a
+      class="status-card"
+      href={card.url}
+      target="_blank"
+      rel="nofollow noopener noreferrer"
+    >
+      {card.image && (
+        <img
+          class="status-card__img"
+          src={card.image}
+          alt=""
+          loading="lazy"
+        />
+      )}
+      <div class="status-card__body">
+        <span class="status-card__meta">
+          <Icon name="link" size={12} />
+          <span>{provider}</span>
+        </span>
+        <strong class="status-card__title">{card.title}</strong>
+        {card.description && (
+          <p class="status-card__desc">{card.description}</p>
+        )}
+      </div>
+    </a>
   )
 }
 
@@ -296,7 +340,7 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
   return (
     <div class="status__actions">
       <button
-        class="icon-btn action"
+        class="icon-btn action action--reply"
         aria-label={`Reply, ${formatCount(status.replies_count)} replies${approval(v.reply)}`}
         title={replyDenied ? 'The author has not allowed replies to this post' : `Reply${approval(v.reply)}`}
         disabled={replyDenied}

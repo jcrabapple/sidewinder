@@ -143,6 +143,7 @@ export function ComposeHost() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [altWarned, setAltWarned] = useState(false)
+  const [dragging, setDragging] = useState(false)
 
   const editing = ctx?.editing
   const replyTo = ctx?.replyTo
@@ -268,8 +269,8 @@ export function ComposeHost() {
     })
   }
 
-  async function addFiles(files: FileList | null) {
-    if (!files || busy) return
+  async function addFiles(files: FileList | File[] | null) {
+    if (!files || busy || pollOn) return
     setError(null)
     const room = limits.maxMedia - media.length
     const picks = [...files].slice(0, Math.max(0, room))
@@ -388,13 +389,32 @@ export function ComposeHost() {
   return (
     <dialog
       ref={dlgRef}
-      class="sw-dialog compose"
+      class={`sw-dialog compose${dragging ? ' compose--dragging' : ''}`}
       aria-labelledby="compose-title"
       onClose={() => {
         if (composeOpen.value) closeCompose()
       }}
       onCancel={() => {
         if (composeOpen.value) closeCompose()
+      }}
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types.includes('Files')) {
+          e.preventDefault()
+          if (!dragging) setDragging(true)
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+          setDragging(false)
+        }
+      }}
+      onDrop={(e) => {
+        setDragging(false)
+        const files = e.dataTransfer?.files
+        if (files && files.length > 0) {
+          e.preventDefault()
+          void addFiles(files)
+        }
       }}
     >
       <div class="sw-dialog__head">
@@ -424,7 +444,22 @@ export function ComposeHost() {
             ref={textRef}
             class="textarea compose__text"
             value={text}
-            onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+            onInput={(e) => setText((e.target as HTMLInputElement).value)}
+            onPaste={(e) => {
+              const items = e.clipboardData?.items
+              if (!items) return
+              const files: File[] = []
+              for (const item of items) {
+                if (item.kind === 'file' && /^(image|video|audio)\//.test(item.type)) {
+                  const f = item.getAsFile()
+                  if (f) files.push(f)
+                }
+              }
+              if (files.length > 0) {
+                e.preventDefault()
+                void addFiles(files)
+              }
+            }}
             onKeyDown={(e) => {
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault()

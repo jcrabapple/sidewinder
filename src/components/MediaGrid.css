@@ -143,4 +143,22 @@ dialog.lightbox {
 
 .lightbox__alt--none { color: var(--fg-muted); font-style: italic; }
 
-.lightbox__close { margin-left: auto; background: var(--surface); }
+.lightbox__controls {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.lightbox__counter {
+  padding: 0 var(--sp-2);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.lightbox__nav,
+.lightbox__close {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+}

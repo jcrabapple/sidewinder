@@ -17,6 +17,7 @@ import { StatusCard } from '../components/StatusCard'
 import { MutedPost } from '../components/MutedPost'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
+import { scrollToTop } from '../util/scroll'
 import './Timelines.css'
 
 export interface TimelinePageProps {
@@ -321,7 +322,7 @@ export function TimelinePage(props: TimelinePageProps) {
       })
       if (seq !== requestSeq.current || page.items.length === 0) return
       setPending((cur) => {
-        const seen = new Set(cur.map((s) => s.id))
+        const seen = new Set([...cur, ...itemsRef.current].map((s) => s.id))
         const merged = [...cur, ...page.items.filter((s) => !seen.has(s.id) && s.id > newestId)]
         return merged.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
       })
@@ -379,7 +380,9 @@ export function TimelinePage(props: TimelinePageProps) {
     seededKeyRef.current = null
     if (snap) {
       anchorRef.current = { anchorId: snap.anchorId, anchorTop: snap.anchorTop, scrollY: snap.scrollY }
-      void fetchNewer(snap.items[0].id)
+      // Max id, not items[0]: late-delivered federated posts shown via the
+      // pill sit at the top with older ids than the posts beneath them.
+      void fetchNewer(snap.items.reduce((m, s) => (s.id > m ? s.id : m), ''))
     } else {
       anchorRef.current = null
       void loadFirst()
@@ -500,14 +503,16 @@ export function TimelinePage(props: TimelinePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, session])
 
+  // The pill always means "go to the top": pending posts are inserted there,
+  // and in-list unread posts are the first cards. Never search for "the first
+  // card newer than the mark": on federated timelines GTS gives a remote post
+  // an id from its CREATION time, so late-delivered posts arrive with ids OLDER
+  // than the current top. Inserted above the list, they fail that test, and the
+  // search used to skip past them to an unread card further DOWN the list.
   function jumpToUnseen() {
     setJumped(true)
     if (pending.length > 0) showPending()
-    requestAnimationFrame(() => {
-      const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-status-id]'))
-      const target = cards.find((el) => isNewer(el.dataset.statusId ?? '', visitMark)) ?? cards[0]
-      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
+    requestAnimationFrame(() => scrollToTop())
   }
 
   function showPending() {

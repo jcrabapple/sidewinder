@@ -10,7 +10,7 @@
  * them chronologically.
  */
 import { api, activeSession } from './auth'
-import { getSeenTop, setSeenTop } from './readState'
+import { getSeenTop, setSeenTop, isValidStatusId } from './readState'
 import type { Api } from '../api/client'
 
 export type MarkerTimeline = 'home' | 'notifications'
@@ -39,7 +39,7 @@ function sessionId(): string {
  *  switches accounts mid-flight, markers fetched for the old account must
  *  never be written into the new account's read state. */
 function adopt(session: string, client: Api, t: MarkerTimeline, marker: Marker | undefined): void {
-  if (!marker) return
+  if (!marker || !isValidStatusId(marker.last_read_id)) return
   if (marker.last_read_id > getSeenTop(session, localKey(t))) {
     setSeenTop(session, localKey(t), marker.last_read_id)
   }

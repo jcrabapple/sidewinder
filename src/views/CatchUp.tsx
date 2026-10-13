@@ -15,7 +15,9 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { Status } from '../api/types'
 import type { Page } from '../api/client'
 import { api, activeSession } from '../state/auth'
-import { getSeenTop } from '../state/readState'
+import { getSeenTop, raiseSeenTop } from '../state/readState'
+import { queueMarkerPush } from '../state/markers'
+import { toast } from '../state/toast'
 import { muteFor } from '../state/mutes'
 import { replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
@@ -82,7 +84,7 @@ export function CatchUpView() {
   // Same key the home timeline writes its high-water mark under.
   const boundary = getSeenTop(sessionId, 'home::')
 
-  const [rangeHours, setRangeHours] = useState(24)
+  const [windowMode, setWindowMode] = useState<'visit' | number>(boundary !== '' ? 'visit' : 24)
   const [filter, setFilter] = useState<Filter>('all')
   const [sort, setSort] = useState<Sort>('newest')
   const [items, setItems] = useState<Status[]>([])
@@ -91,15 +93,13 @@ export function CatchUpView() {
   const [error, setError] = useState<string | null>(null)
   const requestSeq = useRef(0)
 
-  const useRange = boundary === ''
-
   async function load() {
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
     setItems([])
     setLoaded(0)
-    const cutoff = useRange ? Date.now() - rangeHours * 3600_000 : 0
+    const cutoff = windowMode !== 'visit' ? Date.now() - (windowMode as number) * 3600_000 : 0
     const collected: Status[] = []
     try {
       let maxId: string | null = null
@@ -111,12 +111,12 @@ export function CatchUpView() {
         if (res.items.length === 0) break
         let passedBoundary = false
         for (const s of res.items) {
-          if (useRange) {
+          if (windowMode !== 'visit') {
             if (new Date(s.created_at).getTime() < cutoff) {
               passedBoundary = true
               break
             }
-          } else if (s.id <= boundary) {
+          } else if (boundary && s.id <= boundary) {
             passedBoundary = true
             break
           }
@@ -137,10 +137,20 @@ export function CatchUpView() {
     }
   }
 
+  function handleMarkCaughtUp() {
+    if (items.length === 0) return
+    const newest = items[items.length - 1]
+    const newestId = newest.reblog?.id ?? newest.id
+    raiseSeenTop(sessionId, 'home::', newestId)
+    queueMarkerPush('home', newestId)
+    toast('Marked home timeline as read', 'info')
+    void load()
+  }
+
   useEffect(() => {
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, rangeHours, useRange])
+  }, [sessionId, windowMode, boundary])
 
   // Boost dedupe: collapse wrappers of the same original into one entry.
   const entries = useMemo<DigestEntry[]>(() => {
@@ -235,13 +245,24 @@ export function CatchUpView() {
       .slice(0, shared.length > 0 ? 10 : 5)
   }, [entries])
 
-  const rangeLabel = RANGES.find((r) => r.hours === rangeHours)?.label ?? ''
+  const rangeLabel = typeof windowMode === 'number'
+    ? (RANGES.find((r) => r.hours === windowMode)?.label ?? '')
+    : ''
 
   return (
     <div class="catchup">
       <header class="view-header">
         <h1>Catch-up</h1>
         <div class="view-header__actions">
+          {state === 'ready' && items.length > 0 && (
+            <button
+              class="btn btn--subtle"
+              style="min-height: 44px"
+              onClick={handleMarkCaughtUp}
+            >
+              Mark all read
+            </button>
+          )}
           <button
             class="icon-btn"
             aria-label="Refresh digest"
@@ -256,26 +277,34 @@ export function CatchUpView() {
       {state === 'ready' && items.length > 0 && (
         <p class="catchup__summary">
           {items.length === 1 ? '1 post' : `${items.length} posts`}{' '}
-          {useRange ? `from the ${rangeLabel.toLowerCase()}` : 'since your last visit'}
+          {windowMode === 'visit' ? 'since your last visit' : `from the ${rangeLabel.toLowerCase()}`}
           {mutedCount > 0 && ` · ${mutedCount} hidden by your keyword mutes`}
         </p>
       )}
 
-      {useRange && (
-        <div class="catchup__filters" role="tablist" aria-label="Time range">
-          {RANGES.map((r) => (
-            <button
-              key={r.hours}
-              role="tab"
-              aria-selected={rangeHours === r.hours}
-              class={`catchup__filter${rangeHours === r.hours ? ' catchup__filter--active' : ''}`}
-              onClick={() => setRangeHours(r.hours)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <div class="catchup__filters" role="tablist" aria-label="Time window">
+        {boundary !== '' && (
+          <button
+            role="tab"
+            aria-selected={windowMode === 'visit'}
+            class={`catchup__filter${windowMode === 'visit' ? ' catchup__filter--active' : ''}`}
+            onClick={() => setWindowMode('visit')}
+          >
+            Since last visit
+          </button>
+        )}
+        {RANGES.map((r) => (
+          <button
+            key={r.hours}
+            role="tab"
+            aria-selected={windowMode === r.hours}
+            class={`catchup__filter${windowMode === r.hours ? ' catchup__filter--active' : ''}`}
+            onClick={() => setWindowMode(r.hours)}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
 
       <div class="catchup__controls">
         <div class="catchup__filters" role="tablist" aria-label="Filter digest">
@@ -326,10 +355,15 @@ export function CatchUpView() {
         <div class="state-block">
           <h2>You're all caught up</h2>
           <p>
-            {useRange
-              ? `Nothing new in the ${rangeLabel.toLowerCase()}.`
-              : 'Nothing new since your last visit to the home timeline.'}
+            {windowMode === 'visit'
+              ? 'Nothing new since your last visit to the home timeline.'
+              : `Nothing new in the ${rangeLabel.toLowerCase()}.`}
           </p>
+          {windowMode === 'visit' && (
+            <button class="btn" onClick={() => setWindowMode(24)}>
+              Show posts from the last 24 hours
+            </button>
+          )}
         </div>
       )}
 

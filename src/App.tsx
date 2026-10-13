@@ -36,7 +36,6 @@ export function App() {
   // user interaction keeps the session "fresh"; after ABSENCE_MS of none,
   // the next timeline load counts as returning and stops marking posts read.
   useEffect(() => {
-    touchActivity()
     let last = 0
     const beat = () => {
       const now = Date.now()

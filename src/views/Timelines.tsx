@@ -71,6 +71,25 @@ function titleFor(props: TimelinePageProps): string {
 
 const PAGE_SIZE = 30
 
+/**
+ * View-only high-water marks for returning-after-absence loads. When the
+ * user comes back after 5+ minutes away, the persistent read mark (and the
+ * Catch-up boundary behind it) must NOT rise — that's the whole point. But
+ * the jump pill should also not fire for posts the user is literally looking
+ * at at the top of the feed. So on a returning load we give this visit a
+ * view-only boundary at the newest loaded post; it never touches
+ * localStorage or the server marker. Keyed per session+timeline so it
+ * survives route changes (component unmount) but not a page reload.
+ */
+const viewBoundary = new Map<string, string>()
+
+/** The newer of two ULID ids (empty strings allowed). */
+function newerId(a: string, b: string): string {
+  if (!a) return b
+  if (!b) return a
+  return a > b ? a : b
+}
+
 /** First federated query on a server that knows many domains can take ~2min
  *  server-side (GTS warms its cache); later loads are instant. */
 function timeoutFor(props: TimelinePageProps): number {
@@ -118,12 +137,28 @@ export function TimelinePage(props: TimelinePageProps) {
         // Absence-aware read marking: the first load after 5+ minutes away
         // is "just came back" — it must NOT mark away-posts as read (that
         // is exactly the Catch-up set). Only loads while actively using the
-        // app raise the mark.
+        // app raise the persistent mark.
         const fresh = wasRecentlyActive()
         touchActivity()
-        const prev = fresh
-          ? raiseSeenTop(session, key, page.items[0].id)
-          : getSeenTop(session, key)
+        const viewKey = `${session}::${key}`
+        let prev: string
+        if (fresh) {
+          // Active reading: raise the persistent mark; the pill boundary for
+          // this load is what was seen before — the older of the previous
+          // persistent mark and any view-only boundary a returning load
+          // established (that boundary's batch was already displayed).
+          const persistedPrev = getSeenTop(session, key)
+          raiseSeenTop(session, key, page.items[0].id)
+          const viewPrev = viewBoundary.get(viewKey) ?? ''
+          prev = viewPrev && viewPrev > persistedPrev ? viewPrev : persistedPrev
+          viewBoundary.delete(viewKey)
+        } else {
+          // Returning: boundary is view-only, at the newest post on screen,
+          // so the jump pill doesn't point at what the user is already
+          // reading. The persistent mark (Catch-up + server marker) stays.
+          prev = page.items[0].id
+          viewBoundary.set(viewKey, prev)
+        }
         setVisitMark(prev)
         // Push only when the mark actually ROSE (items[0] newer than prev).
         // `prev !== id` would also fire on a shrunk timeline (posts deleted
@@ -199,8 +234,12 @@ export function TimelinePage(props: TimelinePageProps) {
   }, [key])
 
   // Read-state memory: pick up the seen high-water mark for this timeline…
+  // Prefer a view-only boundary from a returning-after-absence load over the
+  // older persistent mark, so re-entering the view mid-visit doesn't repaint
+  // the batch the user already looked at as "unread".
   useEffect(() => {
-    setVisitMark(getSeenTop(session, key))
+    const viewKey = `${session}::${key}`
+    setVisitMark(newerId(getSeenTop(session, key), viewBoundary.get(viewKey) ?? ''))
     setJumped(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, session])

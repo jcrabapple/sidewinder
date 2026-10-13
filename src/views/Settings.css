@@ -215,3 +215,14 @@
   gap: var(--sp-1);
   margin-bottom: var(--sp-2);
 }
+
+.settings__push-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.settings__push-actions .btn {
+  min-height: 44px;
+}

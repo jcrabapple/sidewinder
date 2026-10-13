@@ -5,7 +5,7 @@
 import { settings, updateSettings, type ThemePref, type Settings } from '../state/settings'
 import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
 import { keywordMutes, addKeywordMute, removeKeywordMute } from '../state/mutes'
-import { pushState, pushAlerts, initPushState, enablePush, disablePush, setPushAlert } from '../state/push'
+import { pushState, pushAlerts, initPushState, enablePush, disablePush, setPushAlert, testNotification } from '../state/push'
 import { useEffect, useState } from 'preact/hooks'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { Icon } from '../components/Icon'
@@ -230,18 +230,40 @@ export function SettingsView() {
           <>
             <p class="help-text">
               Subscribed. Pick what reaches you — tap a notification to open it in Sidewinder.
+              Changes save to your account, so they follow you across devices.
             </p>
             <div class="settings__push-alerts" role="group" aria-label="Push notification types">
+              <h3 class="settings__subhead">Activity</h3>
               <Toggle label="Mentions" checked={pushAlerts.value.mention} onChange={(v) => setPushAlert({ mention: v })} />
               <Toggle label="New followers" checked={pushAlerts.value.follow} onChange={(v) => setPushAlert({ follow: v })} />
+              <Toggle label="Follow requests" checked={pushAlerts.value.follow_request} onChange={(v) => setPushAlert({ follow_request: v })} />
               <Toggle label="Boosts" checked={pushAlerts.value.reblog} onChange={(v) => setPushAlert({ reblog: v })} />
               <Toggle label="Favourites" checked={pushAlerts.value.favourite} onChange={(v) => setPushAlert({ favourite: v })} />
               <Toggle label="Polls you voted in" checked={pushAlerts.value.poll} onChange={(v) => setPushAlert({ poll: v })} />
               <Toggle label="Edited posts" checked={pushAlerts.value.update} onChange={(v) => setPushAlert({ update: v })} />
+              <Toggle label="New posts from people you follow" help="Fires for every post by every account you follow — noisy by design, off by default." checked={pushAlerts.value.status} onChange={(v) => setPushAlert({ status: v })} />
             </div>
-            <button class="btn btn--danger" onClick={() => void disablePush()}>
-              Disable push notifications
-            </button>
+            <div class="settings__push-alerts" role="group" aria-label="Moderation notification types">
+              <h3 class="settings__subhead">Moderation</h3>
+              <Toggle label="New sign-ups" checked={pushAlerts.value.admin_sign_up} onChange={(v) => setPushAlert({ admin_sign_up: v })} />
+              <Toggle label="New reports" checked={pushAlerts.value.admin_report} onChange={(v) => setPushAlert({ admin_report: v })} />
+            </div>
+            <div class="settings__push-actions">
+              <button
+                class="btn"
+                onClick={() => {
+                  void testNotification()
+                    .then((shown) => {
+                      toast(shown ? 'Test notification sent — check your system tray' : 'Could not show a test notification', shown ? undefined : 'error')
+                    })
+                }}
+              >
+                Send test notification
+              </button>
+              <button class="btn btn--danger" onClick={() => void disablePush()}>
+                Disable push notifications
+              </button>
+            </div>
           </>
         )}
       </section>

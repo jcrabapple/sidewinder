@@ -16,20 +16,37 @@ import { toast } from './toast'
 export interface PushAlerts {
   mention: boolean
   follow: boolean
+  follow_request: boolean
   favourite: boolean
   reblog: boolean
   poll: boolean
+  status: boolean
   update: boolean
+  admin_sign_up: boolean
+  admin_report: boolean
 }
 
 const ALERTS_KEY = 'sidewinder.push.alerts'
 const DEFAULTS: PushAlerts = {
   mention: true,
   follow: true,
+  follow_request: true,
   favourite: false,
   reblog: true,
   poll: true,
+  status: false,
   update: false,
+  admin_sign_up: false,
+  admin_report: false,
+}
+
+/** API field name for a UI alert key (admin ones use dots server-side). */
+function apiField(k: keyof PushAlerts): string {
+  return k === 'admin_sign_up' ? 'admin.sign_up' : k === 'admin_report' ? 'admin.report' : k
+}
+
+function fromApiField(k: string): keyof PushAlerts | null {
+  return k === 'admin.sign_up' ? 'admin_sign_up' : k === 'admin.report' ? 'admin_report' : (k as keyof PushAlerts)
 }
 
 function loadAlerts(): PushAlerts {
@@ -93,7 +110,37 @@ export async function initPushState(): Promise<void> {
     return
   }
   const existing = await reg.pushManager.getSubscription()
-  pushState.value = existing ? 'subscribed' : 'unsubscribed'
+  if (!existing) {
+    pushState.value = 'unsubscribed'
+    return
+  }
+  pushState.value = 'subscribed'
+  // Reconcile: adopt the server's alert set if it differs from local prefs
+  // (e.g. toggles changed in another browser, or defaults were extended).
+  try {
+    const sub = await api.value.get<ServerSubscription>('/api/v1/push/subscription')
+    const serverAlerts = sub.data?.alerts
+    if (!serverAlerts) return
+    let drifted = false
+    const merged = { ...pushAlerts.value }
+    for (const [k, v] of Object.entries(serverAlerts)) {
+      const key = fromApiField(k)
+      if (key && key in merged && typeof v === 'boolean') {
+        merged[key] = v
+        if (v !== pushAlerts.value[key]) drifted = true
+      }
+    }
+    if (drifted) {
+      pushAlerts.value = merged
+      persistAlerts()
+    }
+  } catch (e) {
+    console.debug('push: alert reconcile failed', e)
+  }
+}
+
+interface ServerSubscription {
+  data?: { alerts?: Record<string, unknown> }
 }
 
 interface InstanceVapid {
@@ -109,19 +156,16 @@ async function vapidKey(): Promise<string> {
 
 function alertsBody(): Record<string, unknown> {
   const a = pushAlerts.value
+  const alerts: Record<string, boolean> = {}
+  for (const k of Object.keys(a) as (keyof PushAlerts)[]) {
+    alerts[apiField(k)] = a[k]
+  }
   return {
     subscription: {
       endpoint: 'PLACEHOLDER',
     },
     data: {
-      alerts: {
-        mention: a.mention,
-        follow: a.follow,
-        favourite: a.favourite,
-        reblog: a.reblog,
-        poll: a.poll,
-        update: a.update,
-      },
+      alerts,
       policy: 'all',
     },
   }
@@ -164,6 +208,27 @@ export async function syncPushAlerts(): Promise<void> {
   } catch (e) {
     toast('Could not update notification settings.', 'error')
     console.debug('push: alert sync failed', e)
+  }
+}
+
+/** Show a local test notification via the service worker registration. */
+export async function testNotification(): Promise<boolean> {
+  if (!supported() || typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+    return false
+  }
+  try {
+    const reg = await swRegistration()
+    if (!reg) return false
+    await reg.showNotification('Sidewinder test', {
+      body: 'Notifications are working. This is what a mention will look like.',
+      icon: '/favicon.png',
+      badge: '/favicon.png',
+      tag: 'sidewinder-test',
+    })
+    return true
+  } catch (e) {
+    console.debug('push: test notification failed', e)
+    return false
   }
 }
 

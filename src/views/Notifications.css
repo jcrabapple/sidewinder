@@ -158,6 +158,21 @@ a.notifications__name:hover { text-decoration: underline; }
   margin-left: calc(28px + var(--sp-3));
 }
 
+.notifications__signup {
+  margin-top: var(--sp-2);
+  margin-left: calc(28px + var(--sp-3));
+}
+
+.notifications__signup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.notifications__signup-actions .btn {
+  min-height: 44px;
+}
+
 .notifications__more { margin: var(--sp-4) auto; }
 
 .notifications__end {

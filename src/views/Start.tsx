@@ -19,9 +19,9 @@ export async function consumeOAuthReturn(): Promise<void> {
   if (!code || !state) return
   // Clean the URL first so a refresh doesn't retry a consumed code.
   history.replaceState(null, '', location.pathname + location.hash)
-  const { token, base } = await exchangeCode(code, state)
+  const { token, base, scopes } = await exchangeCode(code, state)
   const account = await fetchAccount(base, token)
-  upsertSession({ id: sessionIdFor(base, account.id), base, token, account })
+  upsertSession({ id: sessionIdFor(base, account.id), base, token, account, scopes })
   navigate('/')
 }
 

@@ -8,6 +8,7 @@ import { Api, postForm, ApiError } from './client'
 import type { Instance, TokenResponse } from './types'
 
 export const SCOPES = 'read write follow push'
+export const ADMIN_SCOPES = 'read write follow push admin'
 
 export interface ClientCredentials {
   client_id: string
@@ -28,9 +29,16 @@ function saveClients(clients: Record<string, ClientCredentials>) {
   localStorage.setItem(STORE_KEY, JSON.stringify(clients))
 }
 
-export async function getOrCreateClient(base: string): Promise<ClientCredentials> {
+/** Apps are keyed per base+scope pair: admin tools use a separate
+ *  registration so ordinary sessions never hold an admin-scoped token. */
+function clientKey(base: string, scopes: string): string {
+  return `${base}::${scopes}`
+}
+
+export async function getOrCreateClient(base: string, scopes: string = SCOPES): Promise<ClientCredentials> {
   const clients = loadClients()
-  const existing = clients[base]
+  const key = clientKey(base, scopes)
+  const existing = clients[key]
   if (existing) {
     // Sanity: try to use it; if the app row was wiped server-side, re-register.
     try {
@@ -44,22 +52,30 @@ export async function getOrCreateClient(base: string): Promise<ClientCredentials
   const created = await new Api(base).post<ClientCredentials>('/api/v1/apps', {
     client_name: 'Sidewinder',
     redirect_uris: location.origin + '/',
-    scopes: SCOPES,
+    scopes,
     website: location.origin,
   })
-  clients[base] = { client_id: created.client_id, client_secret: created.client_secret }
+  clients[key] = { client_id: created.client_id, client_secret: created.client_secret }
   saveClients(clients)
-  return clients[base]
+  return clients[key]
 }
 
-export function authorizeUrl(base: string, creds: ClientCredentials, instance?: Instance): string {
+export function authorizeUrl(
+  base: string,
+  creds: ClientCredentials,
+  instance?: Instance,
+  scopes: string = SCOPES,
+): string {
   const state = crypto.randomUUID()
-  sessionStorage.setItem('sidewinder.oauth_state', JSON.stringify({ state, base, at: Date.now() }))
+  sessionStorage.setItem(
+    'sidewinder.oauth_state',
+    JSON.stringify({ state, base, clientKey: clientKey(base, scopes), at: Date.now() }),
+  )
   const u = new URL('/oauth/authorize', base)
   u.searchParams.set('response_type', 'code')
   u.searchParams.set('client_id', creds.client_id)
   u.searchParams.set('redirect_uri', location.origin + '/')
-  u.searchParams.set('scope', SCOPES)
+  u.searchParams.set('scope', scopes)
   u.searchParams.set('state', state)
   if (instance?.uri) u.searchParams.set('instance', instance.uri)
   return u.toString()
@@ -69,14 +85,14 @@ export function authorizeUrl(base: string, creds: ClientCredentials, instance?: 
 export async function exchangeCode(
   code: string,
   state: string,
-): Promise<{ token: string; base: string }> {
+): Promise<{ token: string; base: string; scopes: string }> {
   const raw = sessionStorage.getItem('sidewinder.oauth_state')
   sessionStorage.removeItem('sidewinder.oauth_state')
   if (!raw) throw new ApiError(400, 'No sign-in attempt in progress (state missing). Start again.')
-  const saved = JSON.parse(raw) as { state: string; base: string; at: number }
+  const saved = JSON.parse(raw) as { state: string; base: string; clientKey?: string; at: number }
   if (state !== saved.state) throw new ApiError(400, 'Sign-in state mismatch. Start again.')
   if (Date.now() - saved.at > 10 * 60 * 1000) throw new ApiError(400, 'Sign-in attempt expired. Start again.')
-  const creds = loadClients()[saved.base]
+  const creds = loadClients()[saved.clientKey ?? saved.base]
   if (!creds) throw new ApiError(400, 'Client registration missing. Start again.')
   const tok = await postForm<TokenResponse>(saved.base, '/oauth/token', {
     grant_type: 'authorization_code',
@@ -84,9 +100,9 @@ export async function exchangeCode(
     redirect_uri: location.origin + '/',
     client_id: creds.client_id,
     client_secret: creds.client_secret,
-    scope: SCOPES,
+    scope: saved.clientKey ? saved.clientKey.split('::')[1] : SCOPES,
   })
-  return { token: tok.access_token, base: saved.base }
+  return { token: tok.access_token, base: saved.base, scopes: tok.scope }
 }
 
 /** Highest-value error to show the user during login. */

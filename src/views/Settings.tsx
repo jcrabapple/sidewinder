@@ -6,10 +6,12 @@ import { settings, updateSettings, type ThemePref, type Settings } from '../stat
 import { seenPostsCount, clearSeenPosts } from '../state/seenPosts'
 import { keywordMutes, addKeywordMute, removeKeywordMute } from '../state/mutes'
 import { hiddenBoosters, toggleHiddenBooster } from '../state/hideBoosts'
+import { hasAdminScope } from '../state/admin'
+import { getOrCreateClient, authorizeUrl, ADMIN_SCOPES } from '../api/oauth'
 import { pushState, pushAlerts, initPushState, enablePush, disablePush, setPushAlert, testNotification } from '../state/push'
 import { useEffect, useState } from 'preact/hooks'
-import type { Account } from '../api/types'
-import { api, activeSession, sessions, switchAccount, logout } from '../state/auth'
+import type { Account, AccountCredentials } from '../api/types'
+import { api, activeSession, sessions, switchAccount, logout, type Session } from '../state/auth'
 import { Icon } from '../components/Icon'
 import { toast } from '../state/toast'
 import { useTitle, navigate } from '../router'
@@ -195,6 +197,42 @@ export function SettingsView() {
 
       <HiddenBoostersSection />
 
+      {session && isAdminRole(session.account) && (
+        <section class="settings__section card" aria-labelledby="settings-moderation">
+          <h2 id="settings-moderation">Moderation</h2>
+          {hasAdminScope() ? (
+            <>
+              <p class="help-text">
+                Moderation tools are enabled. New account signups arrive as notifications with
+                Approve and Deny buttons.
+              </p>
+              <button class="btn" onClick={() => navigate('/notifications')}>
+                Open notifications
+              </button>
+            </>
+          ) : (
+            <>
+              <p class="help-text">
+                Moderation needs an extra permission (admin scope). Enable it to approve or deny
+                new account signups right from the Notifications view. You will be asked to sign in
+                to {session.base.replace(/^https?:\/\//, '')} again.
+              </p>
+              <button
+                class="btn btn--primary"
+                onClick={() => {
+                  void enableModerationTools(session)
+                    .catch((e: unknown) =>
+                      toast(e instanceof Error ? e.message : 'Could not enable moderation tools.', 'error'),
+                    )
+                }}
+              >
+                Enable moderation tools
+              </button>
+            </>
+          )}
+        </section>
+      )}
+
       <section class="settings__section card" aria-labelledby="settings-push">
         <h2 id="settings-push">Push notifications</h2>
         {pushState.value === 'checking' && <p class="help-text">Checking push support…</p>}
@@ -340,6 +378,18 @@ export function SettingsView() {
       </section>
     </div>
   )
+}
+
+/** Is this account an instance admin/moderator (per its role claim)? */
+function isAdminRole(account: AccountCredentials): boolean {
+  const role = account.role?.name?.toLowerCase()
+  return role === 'admin' || role === 'moderator'
+}
+
+/** Re-run the OAuth flow with admin scopes added to the session token. */
+async function enableModerationTools(session: Session) {
+  const creds = await getOrCreateClient(session.base, ADMIN_SCOPES)
+  location.assign(authorizeUrl(session.base, creds, undefined, ADMIN_SCOPES))
 }
 
 function HiddenBoostersSection() {

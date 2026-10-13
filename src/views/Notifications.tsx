@@ -6,7 +6,9 @@
 import { Fragment } from 'preact'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import type { Notification, Status } from '../api/types'
-import { api } from '../state/auth'
+import { toast } from '../state/toast'
+import { api, activeSession } from '../state/auth'
+import { hasAdminScope, approveSignup, denySignup } from '../state/admin'
 import { onNotification } from '../state/streaming'
 import { refreshFollowRequestCount } from '../state/notifications'
 import { queueMarkerPush, syncMarkersFromServer } from '../state/markers'
@@ -358,6 +360,10 @@ export function NotificationsView() {
                 highlighted={highlightId === e.notification.id}
                 onStatusUpdated={onStatusUpdated}
                 onStatusDeleted={onStatusDeleted}
+                onHandled={(id) => {
+                  setItems((cur) => cur.filter((n) => n.id !== id))
+                  setPending((cur) => cur.filter((n) => n.id !== id))
+                }}
               />
             ) : (
               <GroupedRow
@@ -465,15 +471,60 @@ function NotificationRow({
   highlighted,
   onStatusUpdated,
   onStatusDeleted,
+  onHandled,
 }: {
   notification: Notification
   highlighted?: boolean
   onStatusUpdated: (s: Status) => void
   onStatusDeleted: (id: string) => void
+  /** Called after a moderation action handled this notification. */
+  onHandled?: (id: string) => void
 }) {
   const kind = kindInfo(n)
   const account = n.account
   const name = account ? account.display_name || account.username : 'Someone'
+  const [signupBusy, setSignupBusy] = useState<'approve' | 'deny' | null>(null)
+  const canModerate = n.type === 'admin.sign_up' && hasAdminScope()
+
+  async function handleSignup(decision: 'approve' | 'deny') {
+    if (!account || signupBusy) return
+    if (
+      decision === 'deny' &&
+      !window.confirm(`Deny @${account.acct}'s signup? Their pending account will be removed.`)
+    ) {
+      return
+    }
+    setSignupBusy(decision)
+    try {
+      if (decision === 'approve') {
+        await approveSignup({
+          id: account.id,
+          username: account.username,
+          domain: account.domain ?? null,
+          created_at: n.created_at,
+          confirmed: false,
+          approved: false,
+          account: {
+            id: account.id,
+            username: account.username,
+            acct: account.acct,
+            display_name: account.display_name || account.username,
+            avatar: account.avatar,
+            avatar_static: account.avatar_static,
+          },
+        })
+        toast(`@${account.acct} approved — they can sign in now`)
+      } else {
+        await denySignup(account.id)
+        toast(`@${account.acct}'s signup denied`)
+      }
+      onHandled?.(n.id)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : `Could not ${decision} the signup.`, 'error')
+    } finally {
+      setSignupBusy(null)
+    }
+  }
 
   return (
     <article
@@ -508,6 +559,45 @@ function NotificationRow({
           <time dateTime={n.created_at}>{formatRelative(n.created_at)}</time>
         </span>
       </div>
+
+      {n.type === 'admin.sign_up' && account && (
+        <div class="notifications__signup">
+          {canModerate ? (
+            <div class="notifications__signup-actions">
+              <button
+                class="btn btn--primary"
+                disabled={signupBusy !== null}
+                onClick={() => void handleSignup('approve')}
+              >
+                <Icon name="check" size={16} />
+                {signupBusy === 'approve' ? 'Approving…' : 'Approve'}
+              </button>
+              <button
+                class="btn btn--danger"
+                disabled={signupBusy !== null}
+                onClick={() => void handleSignup('deny')}
+              >
+                <Icon name="x" size={16} />
+                {signupBusy === 'deny' ? 'Denying…' : 'Deny'}
+              </button>
+            </div>
+          ) : (
+            <p class="help-text">
+              Approving signups needs moderation rights. Enable them in{' '}
+              <a
+                href="#/settings"
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate('/settings')
+                }}
+              >
+                Settings
+              </a>
+              .
+            </p>
+          )}
+        </div>
+      )}
 
       {n.type === 'follow_request' && account && (
         <div class="notifications__fr-actions">

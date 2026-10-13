@@ -11,6 +11,8 @@ export interface Session {
   base: string
   token: string
   account: AccountCredentials
+  /** OAuth scopes this session's token carries (e.g. admin for moderation). */
+  scopes?: string
 }
 
 const STORE_KEY = 'sidewinder.sessions'

@@ -1,0 +1,217 @@
+/* Moderation view: tabs, admin cards, report rows, domain blocklist. */
+
+.moderation__tabs {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-3);
+  overflow-x: auto;
+}
+
+.moderation__tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: var(--sp-2) var(--sp-3);
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.moderation__tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.moderation__filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-3);
+}
+
+.moderation__filter-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: var(--sp-1) var(--sp-3);
+  min-height: 44px;
+}
+
+.moderation__filter-btn.is-active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Shared card row ----------------------------------------------------------- */
+
+.moderation__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.moderation__card {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.moderation__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.moderation__avatar {
+  flex: none;
+  border-radius: var(--radius-m);
+}
+
+.moderation__avatar img {
+  display: block;
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+
+.moderation__card-names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.moderation__card-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.moderation__card-name {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.moderation__card-name:hover {
+  text-decoration: underline;
+}
+
+.moderation__card-handle {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  overflow-wrap: anywhere;
+}
+
+.moderation__when {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  white-space: nowrap;
+}
+
+.moderation__reason {
+  margin: 0;
+  border-left: 3px solid var(--border);
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.moderation__resolved-note {
+  color: var(--fg-muted);
+}
+
+.moderation__card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.moderation__btn-row {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.moderation__reason-input {
+  flex: 1;
+}
+
+.moderation__more {
+  align-self: center;
+  margin: var(--sp-2) auto;
+}
+
+/* Accounts tab --------------------------------------------------------------- */
+
+.moderation__search {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--sp-3);
+}
+
+.moderation__search .input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.moderation__search .select {
+  flex: 0 0 auto;
+}
+
+.moderation__obfuscate {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-s);
+  color: var(--fg-muted);
+}
+
+/* Domain blocks --------------------------------------------------------------- */
+
+.moderation__domains-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.moderation__domains-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.moderation__domains-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.moderation__domains-comment {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.moderation__domains-row .icon-btn {
+  margin-left: auto;
+}

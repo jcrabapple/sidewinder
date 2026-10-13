@@ -17,6 +17,8 @@ interface NavItem {
   icon: string
   /** When true, shows a dot if unseen notifications exist. */
   attention?: boolean
+  /** Only rendered for admin/moderator accounts. */
+  admin?: boolean
 }
 
 const ITEMS: NavItem[] = [
@@ -31,8 +33,15 @@ const ITEMS: NavItem[] = [
   { href: '/bookmarks', label: 'Bookmarks', icon: 'bookmark' },
   { href: '/wrapped', label: 'Wrapped', icon: 'sparkle' },
   { href: '/follow_requests', label: 'Follow requests', icon: 'user-plus', attention: true },
+  { href: '/moderation', label: 'Moderation', icon: 'shield', admin: true },
   { href: '/settings', label: 'Settings', icon: 'sliders' },
 ]
+
+/** Is this session's account an instance admin/moderator (per its role claim)? */
+function isAdminRole(sess: { account?: { role?: { name?: string } } } | null): boolean {
+  const role = sess?.account?.role?.name?.toLowerCase()
+  return role === 'admin' || role === 'moderator'
+}
 
 function isActive(href: string, segments: string[]): boolean {
   const parts = href.split('/').filter(Boolean)
@@ -70,7 +79,7 @@ export function NavRail() {
         <span class="nav-brand__name">Sidewinder</span>
       </a>
       <div class="nav-rail__items">
-        {ITEMS.map((item) => (
+        {ITEMS.filter((item) => !item.admin || isAdminRole(sess)).map((item) => (
           <NavButton key={item.href} item={item} />
         ))}
       </div>
@@ -127,7 +136,7 @@ const MOBILE: NavItem[] = MOBILE_HREFS
   .map((href) => ITEMS.find((i) => i.href === href))
   .filter((i): i is NavItem => Boolean(i))
 
-const MORE_HREFS = ['/local', '/federated', '/lists', '/favourites', '/bookmarks', '/wrapped', '/follow_requests', '/settings']
+const MORE_HREFS = ['/local', '/federated', '/lists', '/favourites', '/bookmarks', '/wrapped', '/follow_requests', '/moderation', '/settings']
 const MORE_ITEMS: NavItem[] = MORE_HREFS
   .map((href) => ITEMS.find((i) => i.href === href))
   .filter((i): i is NavItem => Boolean(i))
@@ -136,7 +145,11 @@ export function MobileTabs() {
   const sess = activeSession.value
   if (!sess) return null
   const segments = route.value.segments
-  const moreActive = MORE_ITEMS.some((item) => isActive(item.href, segments))
+  // Admin-only entries are hidden for regular accounts on both surfaces;
+  // build the surface's item list from the same ITEMS array so insertions
+  // cannot silently reshuffle either one.
+  const moreItems = MORE_ITEMS.filter((item) => !item.admin || isAdminRole(sess))
+  const moreActive = moreItems.some((item) => isActive(item.href, segments))
   return (
     <nav class="mobile-tabs" aria-label="Primary">
       {MOBILE.map((item) => {
@@ -202,7 +215,7 @@ function MoreTab({ active }: { active: boolean }) {
           </button>
         </div>
         <div class="sw-dialog__body more-sheet__items">
-          {MORE_ITEMS.map((item) => {
+          {(isAdminRole(activeSession.value) ? MORE_ITEMS : MORE_ITEMS.filter((item) => !item.admin)).map((item) => {
             const itemActive = isActive(item.href, segments)
             const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
             return (

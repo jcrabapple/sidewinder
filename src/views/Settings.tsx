@@ -203,12 +203,19 @@ export function SettingsView() {
           {hasAdminScope() ? (
             <>
               <p class="help-text">
-                Moderation tools are enabled. New account signups arrive as notifications with
-                Approve and Deny buttons.
+                Moderation tools are enabled. Reports, account suspends, and the domain blocklist
+                live in the Moderation view; new signups also arrive as notifications with Approve
+                and Deny buttons.
               </p>
-              <button class="btn" onClick={() => navigate('/notifications')}>
-                Open notifications
-              </button>
+              <div class="moderation-entry">
+                <button class="btn" onClick={() => navigate('/moderation')}>
+                  <Icon name="shield" size={16} />
+                  Open moderation
+                </button>
+                <button class="btn" onClick={() => navigate('/notifications')}>
+                  Open notifications
+                </button>
+              </div>
             </>
           ) : (
             <>

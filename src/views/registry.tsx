@@ -10,6 +10,7 @@ import { WrappedView } from './Wrapped'
 import { CatchUpView } from './CatchUp'
 import { FollowRequestsView } from './FollowRequests'
 import { AccountRelationshipsView } from './AccountRelationships'
+import { ModerationView } from './Moderation'
 import { SettingsView } from './Settings'
 import { navigate } from '../router'
 
@@ -49,6 +50,8 @@ export function AppRoutes({ route }: { route: Route }) {
       return <CollectionsView kind="bookmarks" />
     case 'follow_requests':
       return <FollowRequestsView />
+    case 'moderation':
+      return <ModerationView />
     case 'wrapped':
       return <WrappedView />
     case 'settings':

@@ -94,3 +94,133 @@ export async function approveSignup(a: AdminAccount): Promise<void> {
 export async function denySignup(id: string): Promise<void> {
   await api.value.post(`/api/v1/admin/accounts/${encodeURIComponent(id)}/reject`)
 }
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+
+/** Lightweight account card used inside admin report payloads. */
+export interface AdminAccountInfo {
+  id: string
+  username: string
+  acct: string
+  domain: string | null
+  display_name: string
+  avatar: string
+  avatar_static: string
+  suspended?: boolean | null
+}
+
+/** Shape of GET /api/v1/admin/reports (GTS AdminReport). */
+export interface AdminReport {
+  id: string
+  action_taken: boolean
+  action_taken_at: string | null
+  action_taken_comment: string | null
+  category: string
+  comment: string
+  forwarded: boolean
+  created_at: string
+  updated_at: string
+  account: AdminAccountInfo
+  target_account: AdminAccountInfo
+  assigned_account: AdminAccountInfo | null
+  action_taken_by_account: AdminAccountInfo | null
+  statuses: { id: string; url?: string | null; content?: string | null }[]
+  rules: { id: string; text?: string | null; description?: string | null }[]
+}
+
+/** Shape of a domain permission row (GET /api/v1/admin/domain_blocks). */
+export interface AdminDomainBlock {
+  id: string
+  domain: string
+  obfuscate: boolean
+  public_comment: string | null
+  private_comment: string | null
+  created_at: string
+}
+
+/**
+ * One page of reports. `resolved=true` returns resolved reports; omit it for
+ * open ones. Paged via the Link header like every other collection.
+ */
+export async function fetchReports(resolved: boolean, maxId?: string) {
+  return api.value.page<AdminReport>('/api/v1/admin/reports', {
+    query: { resolved, limit: 40, max_id: maxId },
+  })
+}
+
+/**
+ * Mark a report resolved. The comment is shown to the account that filed it,
+ * so keep it factual — "no action needed: the reported posts were spam,
+ * removed" rather than nothing.
+ */
+export async function resolveReport(id: string, comment?: string): Promise<void> {
+  await api.value.post(
+    `/api/v1/admin/reports/${encodeURIComponent(id)}/resolve`,
+    comment?.trim() ? { action_taken_comment: comment.trim() } : {},
+  )
+}
+
+/**
+ * Suspend an account (admin action). GTS 0.22 supports `type=suspend` only on
+ * this endpoint, and there is no API to undo a suspend — that takes the
+ * server CLI. The UI must say so before anyone clicks.
+ */
+export async function suspendAccount(id: string, text?: string): Promise<void> {
+  const form = new FormData()
+  form.append('type', 'suspend')
+  if (text?.trim()) form.append('text', text.trim())
+  await api.value.request<void>(
+    `/api/v1/admin/accounts/${encodeURIComponent(id)}/action`,
+    { method: 'POST', body: form },
+  )
+}
+
+/**
+ * Admin account search: by username substring, optionally narrowed to remote
+ * or suspended accounts.
+ */
+export async function searchAdminAccounts(opts: {
+  username?: string
+  remote?: boolean
+  suspended?: boolean
+  maxId?: string
+}) {
+  return api.value.page<AdminAccount>('/api/v1/admin/accounts', {
+    query: {
+      username: opts.username,
+      remote: opts.remote === true ? true : undefined,
+      suspended: opts.suspended === true ? true : undefined,
+      limit: 40,
+      max_id: opts.maxId,
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Domain blocks
+// ---------------------------------------------------------------------------
+
+export async function fetchDomainBlocks(maxId?: string) {
+  return api.value.page<AdminDomainBlock>('/api/v1/admin/domain_blocks', {
+    query: { limit: 100, max_id: maxId },
+  })
+}
+
+export async function createDomainBlock(
+  domain: string,
+  opts: { publicComment?: string; obfuscate?: boolean } = {},
+): Promise<void> {
+  const form = new FormData()
+  form.append('domain', domain.trim().toLowerCase())
+  if (opts.publicComment?.trim()) form.append('public_comment', opts.publicComment.trim())
+  if (opts.obfuscate) form.append('obfuscate', 'true')
+  await api.value.request<void>('/api/v1/admin/domain_blocks', { method: 'POST', body: form })
+}
+
+export async function deleteDomainBlock(id: string): Promise<void> {
+  await api.value.request<void>(`/api/v1/admin/domain_blocks/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}

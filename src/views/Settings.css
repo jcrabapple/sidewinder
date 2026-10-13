@@ -240,3 +240,10 @@
 .settings__push-actions .btn {
   min-height: 44px;
 }
+
+/* Moderation entry buttons in the admin card */
+.moderation-entry {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}

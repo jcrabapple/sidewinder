@@ -599,6 +599,21 @@ function NotificationRow({
         </div>
       )}
 
+      {n.type === 'admin.report' && hasAdminScope() && (
+        <div class="notifications__signup">
+          <a
+            class="btn"
+            href="#/moderation"
+            onClick={(e) => {
+              e.preventDefault()
+              navigate('/moderation')
+            }}
+          >
+            Review reports
+          </a>
+        </div>
+      )}
+
       {n.type === 'follow_request' && account && (
         <div class="notifications__fr-actions">
           <button class="btn" onClick={() => navigate('/follow_requests')}>

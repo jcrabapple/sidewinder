@@ -276,8 +276,10 @@ export function TimelinePage(props: TimelinePageProps) {
 
   // Hidden-boost filter, computed at render so toggling "hide boosts" on a
   // profile takes effect immediately in an open timeline. Reading the signal
-  // here also subscribes this component to further changes.
-  const visibleItems = items.filter((s) => !(s.reblog && isHiddenBooster(s.reblog.account.id)))
+  // here also subscribes this component to further changes. A boost wrapper's
+  // top-level `account` is the BOOSTER; `reblog.account` is the original
+  // author — we hide by booster.
+  const visibleItems = items.filter((s) => !(s.reblog && isHiddenBooster(s.account.id)))
 
   // Read-state: how many posts arrived since the last timeline load, and
   // where the new/old divider falls.

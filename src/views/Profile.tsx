@@ -24,6 +24,7 @@ import {
   muteAccount,
   unmuteAccount,
 } from '../state/relationships'
+import { isHiddenBooster, toggleHiddenBooster } from '../state/hideBoosts'
 import './Profile.css'
 
 type LoadState = 'loading' | 'error' | 'ready'
@@ -271,6 +272,7 @@ export function ProfileView({ id }: { id: string }) {
 function RelationshipActions({ id, acct }: { id: string; acct: string }) {
   const rel = relationshipFor(id)
   const [busy, setBusy] = useState(false)
+  const boostsHidden = isHiddenBooster(id)
 
   if (!rel) {
     return <span class="profile__rel-loading" role="status"><span class="spinner" aria-hidden="true" /></span>
@@ -313,6 +315,19 @@ function RelationshipActions({ id, acct }: { id: string; acct: string }) {
         onClick={() => void run(rel.muting ? unmuteAccount : muteAccount)}
       >
         <Icon name="volume-x" size={18} />
+      </button>
+      <button
+        class="icon-btn profile__boost-hide-btn"
+        aria-label={boostsHidden ? `Show boosts from @${acct}` : `Hide boosts from @${acct}`}
+        title={boostsHidden ? 'Boosts hidden' : 'Hide boosts'}
+        aria-pressed={boostsHidden}
+        onClick={() => {
+          const next = !boostsHidden
+          toggleHiddenBooster(id, next)
+          toast(next ? `Boosts from @${acct} are hidden` : `Boosts from @${acct} are visible again`)
+        }}
+      >
+        <Icon name="repeat" size={18} />
       </button>
       <button
         class="icon-btn profile__block-btn"

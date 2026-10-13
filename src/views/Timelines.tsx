@@ -9,6 +9,7 @@ import type { Status } from '../api/types'
 import { api, activeSession } from '../state/auth'
 import { onStatus, type StreamName } from '../state/streaming'
 import { getSeenTop, raiseSeenTop, isNewer, wasRecentlyActive, touchActivity } from '../state/readState'
+import { isHiddenBooster } from '../state/hideBoosts'
 import { queueMarkerPush } from '../state/markers'
 import { recordSeenPosts } from '../state/seenPosts'
 import { StatusCard } from '../components/StatusCard'
@@ -273,10 +274,15 @@ export function TimelinePage(props: TimelinePageProps) {
 
   const heading = props.kind === 'list' && listTitle ? listTitle : title
 
+  // Hidden-boost filter, computed at render so toggling "hide boosts" on a
+  // profile takes effect immediately in an open timeline. Reading the signal
+  // here also subscribes this component to further changes.
+  const visibleItems = items.filter((s) => !(s.reblog && isHiddenBooster(s.reblog.account.id)))
+
   // Read-state: how many posts arrived since the last timeline load, and
   // where the new/old divider falls.
-  const unseenCount = pending.length + items.filter((s) => isNewer(s.id, visitMark)).length
-  const firstSeenIndex = visitMark ? items.findIndex((s) => !isNewer(s.id, visitMark)) : -1
+  const unseenCount = pending.length + visibleItems.filter((s) => isNewer(s.id, visitMark)).length
+  const firstSeenIndex = visitMark ? visibleItems.findIndex((s) => !isNewer(s.id, visitMark)) : -1
   const showPill = unseenCount > 0 && (!jumped || pending.length > 0)
 
   return (
@@ -344,7 +350,7 @@ export function TimelinePage(props: TimelinePageProps) {
 
       {state === 'ready' && items.length > 0 && (
         <div class="timelines__list" aria-busy={loadingMore}>
-          {items.map((s, i) => (
+          {visibleItems.map((s, i) => (
             <Fragment key={s.id}>
               {i === firstSeenIndex && firstSeenIndex > 0 && (
                 <div class="timelines__seen-divider" role="separator" aria-label="Posts above this line are new since your last visit to this timeline">

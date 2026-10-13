@@ -16,6 +16,7 @@ import type { Status } from '../api/types'
 import type { Page } from '../api/client'
 import { api, activeSession } from '../state/auth'
 import { getSeenTop, raiseSeenTop } from '../state/readState'
+import { isHiddenBooster } from '../state/hideBoosts'
 import { queueMarkerPush } from '../state/markers'
 import { toast } from '../state/toast'
 import { muteFor } from '../state/mutes'
@@ -181,6 +182,9 @@ export function CatchUpView() {
   const filtered = useMemo(() => {
     const out = entries.filter((e) => {
       if (muteFor(e.status)) return false
+      // Entries boosted by someone whose boosts you hide drop out entirely;
+      // their originals stay when others boosted them too.
+      if (e.boosters.some((b) => isHiddenBooster(b.id))) return false
       const boosted = e.boosters.length > 0
       const isReply = Boolean(e.status.in_reply_to_id) && e.status.in_reply_to_account_id !== me
       switch (filter) {

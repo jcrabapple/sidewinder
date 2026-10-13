@@ -137,6 +137,12 @@
 
 .profile__counts strong { color: var(--fg); font-weight: 700; }
 
+/* Pressed state for the toggle-style icon buttons (mute, hide boosts). */
+.profile__actions .icon-btn[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
 .profile__count-link {
   color: inherit;
   text-decoration: none;

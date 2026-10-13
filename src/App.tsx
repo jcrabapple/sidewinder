@@ -32,6 +32,22 @@ export function App() {
     if (sessionId) void syncMarkersFromServer()
   }, [sessionId])
 
+  // Web Share Target: when launched via Android/desktop share sheet with
+  // ?title=&text=&url=, open the composer pre-filled with the shared payload.
+  useEffect(() => {
+    if (!sessionId) return
+    const params = new URLSearchParams(location.search)
+    if (params.has('code') || params.has('state')) return
+    const sharedTitle = params.get('title')?.trim() ?? ''
+    const sharedText = params.get('text')?.trim() ?? ''
+    const sharedUrl = params.get('url')?.trim() ?? ''
+    if (!sharedTitle && !sharedText && !sharedUrl) return
+    history.replaceState(null, '', location.pathname + location.hash)
+    const parts = [sharedTitle, sharedText, sharedUrl].filter(Boolean)
+    const deduped = parts.filter((p, i) => parts.findIndex((other) => other.includes(p)) === i)
+    openCompose({ presetText: deduped.join('\n\n') })
+  }, [sessionId])
+
   // Activity heartbeat for absence-aware read marking (see readState.ts):
   // user interaction keeps the session "fresh"; after ABSENCE_MS of none,
   // the next timeline load counts as returning and stops marking posts read.

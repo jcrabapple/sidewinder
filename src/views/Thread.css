@@ -1,4 +1,4 @@
-/* Thread view: ancestor chain, focused status, nested replies. */
+/* Thread view: ancestor chain, focused status, nested replies, engagement drawers. */
 
 .thread__list {
   display: flex;
@@ -16,8 +16,173 @@
   border-bottom: 1px solid var(--border);
 }
 
+.thread__stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.thread__stat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.thread__stat-btn strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.thread__stat-btn:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+.thread__stat-btn.is-active {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--fg);
+}
+
+.thread__drawer {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+}
+
+.thread__drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+}
+
+.thread__drawer-head h3 {
+  margin: 0;
+  font-size: var(--fs-s);
+  font-weight: 650;
+}
+
+.thread__drawer-accounts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.thread__drawer-account {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-s);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.thread__drawer-account:hover {
+  background: var(--surface-2);
+}
+
+.thread__drawer-account img {
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.thread__drawer-names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.thread__drawer-names strong {
+  font-size: var(--fs-s);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread__drawer-names span {
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread__drawer-edits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.thread__drawer-edit {
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.thread__drawer-edit:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.thread__drawer-edit-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
+  margin-bottom: var(--sp-1);
+}
+
+.thread__drawer-edit-meta strong {
+  color: var(--fg);
+}
+
+.thread__drawer-edit-cw {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.thread__drawer-edit-body {
+  font-size: var(--fs-s);
+}
+
 .thread__reply {
   min-width: 0;
+}
+
+.thread__collapse-btn {
+  margin-top: calc(-1 * var(--sp-2));
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--fg-muted);
 }
 
 .thread__no-replies {

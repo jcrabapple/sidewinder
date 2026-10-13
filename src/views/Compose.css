@@ -272,3 +272,94 @@
 .compose__policy-row > span:first-child {
   font-size: var(--fs-s);
 }
+
+/* Autocomplete suggestions (@mention, #tag, :shortcode:) */
+.compose__suggest {
+  list-style: none;
+  margin: calc(-1 * var(--sp-2)) 0 0;
+  padding: var(--sp-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-pop);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.compose__suggest-item {
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-s);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compose__suggest-item:hover,
+.compose__suggest-item.is-active {
+  background: var(--surface-3);
+}
+
+.compose__suggest-item img {
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.compose__suggest-primary {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compose__suggest-secondary {
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Self-thread chain items */
+.compose__chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--border-strong);
+}
+
+.compose__chain-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.compose__chain-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.compose__chain-label {
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.compose__chain-head .compose__count {
+  margin-left: auto;
+}
+
+.compose__chain-text {
+  min-height: 5.5rem;
+}

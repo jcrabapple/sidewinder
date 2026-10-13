@@ -225,3 +225,58 @@
 .search__seen-stats svg + * {
   margin-right: 0.6rem;
 }
+
+/* Followed hashtags block on Search idle state */
+.search__followed {
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.search__followed-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-s);
+  font-weight: 650;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.search__followed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.search__followed-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.search__followed-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  color: var(--fg);
+  font-size: var(--fs-s);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.search__followed-link:hover {
+  color: var(--accent);
+}
+
+.search__followed-remove {
+  width: 44px;
+  height: 44px;
+  color: var(--fg-muted);
+}

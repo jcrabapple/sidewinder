@@ -10,7 +10,7 @@ import { api, activeSession } from '../state/auth'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
 import { customEmojis, emojisStatus, ensureEmojis, loadEmojiSet, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
-import type { Instance, MediaAttachment, Status } from '../api/types'
+import type { Account, Instance, MediaAttachment, SearchResults, Status } from '../api/types'
 import { Icon } from '../components/Icon'
 import './Compose.css'
 
@@ -90,6 +90,29 @@ interface DraftMedia {
   uploading: boolean
 }
 
+type SuggestItem =
+  | { kind: 'account'; key: string; acct: string; name: string; avatar: string; insert: string }
+  | { kind: 'tag'; key: string; name: string; insert: string }
+  | { kind: 'emoji'; key: string; label: string; char?: string; url?: string; insert: string }
+
+interface ActiveToken {
+  trigger: '@' | '#' | ':'
+  query: string
+  start: number
+  end: number
+}
+
+function detectToken(value: string, cursor: number): ActiveToken | null {
+  const before = value.slice(0, cursor)
+  const m = before.match(/(?:^|\s)([@#:])([a-zA-Z0-9_.-]{1,32})$/)
+  if (!m) return null
+  const trigger = m[1] as '@' | '#' | ':'
+  const query = m[2]
+  if (trigger === ':' && query.length < 2) return null
+  const start = cursor - query.length - 1
+  return { trigger, query, start, end: cursor }
+}
+
 const VISIBILITY_LABELS: Record<Visibility, string> = {
   public: 'Public — anyone can see',
   unlisted: 'Unlisted — public, but not listed',
@@ -144,6 +167,11 @@ export function ComposeHost() {
   const [error, setError] = useState<string | null>(null)
   const [altWarned, setAltWarned] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [chain, setChain] = useState<string[]>([])
+  const [suggest, setSuggest] = useState<SuggestItem[]>([])
+  const [suggestIdx, setSuggestIdx] = useState(0)
+  const [token, setToken] = useState<ActiveToken | null>(null)
+  const suggestSeq = useRef(0)
 
   const editing = ctx?.editing
   const replyTo = ctx?.replyTo
@@ -203,6 +231,9 @@ export function ComposeHost() {
     setReplyPolicy('default')
     setBoostPolicy('default')
     setFavPolicy('default')
+    setChain([])
+    setSuggest([])
+    setToken(null)
     if (editing) {
       setText(editing.text ?? stripTags(editing.content))
       setSpoiler(editing.spoiler_text)
@@ -269,6 +300,96 @@ export function ComposeHost() {
     })
   }
 
+  function updateTokenFromTextarea(ta: HTMLTextAreaElement) {
+    const cur = ta.selectionStart ?? ta.value.length
+    const detected = detectToken(ta.value, cur)
+    setToken(detected)
+    if (!detected) setSuggest([])
+  }
+
+  useEffect(() => {
+    if (!token) {
+      setSuggest([])
+      return
+    }
+    const seq = ++suggestSeq.current
+    const { trigger, query } = token
+    if (trigger === ':') {
+      const matches = filterPickerEmojis(pickerEmojis(), query).slice(0, 8)
+      setSuggest(
+        matches.map((e) => ({
+          kind: 'emoji',
+          key: e.key,
+          label: e.shortcode ? `:${e.shortcode}:` : e.name,
+          char: e.char,
+          url: e.url,
+          insert: (e.char ?? `:${e.shortcode}:`) + ' ',
+        })),
+      )
+      setSuggestIdx(0)
+      return
+    }
+    const timer = setTimeout(() => {
+      if (trigger === '@') {
+        api.value
+          .get<Account[]>('/api/v1/accounts/search', { q: query, limit: 6 })
+          .then((list) => {
+            if (seq !== suggestSeq.current) return
+            setSuggest(
+              (list ?? []).slice(0, 6).map((a) => ({
+                kind: 'account',
+                key: a.id,
+                acct: a.acct,
+                name: a.display_name || a.username,
+                avatar: a.avatar_static || a.avatar,
+                insert: `@${a.acct} `,
+              })),
+            )
+            setSuggestIdx(0)
+          })
+          .catch(() => {
+            if (seq === suggestSeq.current) setSuggest([])
+          })
+      } else if (trigger === '#') {
+        api.value
+          .get<SearchResults>('/api/v2/search', { q: query, type: 'hashtags', limit: 6 })
+          .then((res) => {
+            if (seq !== suggestSeq.current) return
+            setSuggest(
+              (res.hashtags ?? []).slice(0, 6).map((h) => ({
+                kind: 'tag',
+                key: h.name,
+                name: h.name,
+                insert: `#${h.name} `,
+              })),
+            )
+            setSuggestIdx(0)
+          })
+          .catch(() => {
+            if (seq === suggestSeq.current) setSuggest([])
+          })
+      }
+    }, 180)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token?.trigger, token?.query])
+
+  function applySuggestion(item: SuggestItem) {
+    if (!token) return
+    const nextText = text.slice(0, token.start) + item.insert + text.slice(token.end)
+    const nextCursor = token.start + item.insert.length
+    setText(nextText)
+    setSuggest([])
+    setToken(null)
+    requestAnimationFrame(() => {
+      const ta = textRef.current
+      if (ta) {
+        ta.focus()
+        ta.selectionStart = ta.selectionEnd = nextCursor
+      }
+    })
+  }
+
   async function addFiles(files: FileList | File[] | null) {
     if (!files || busy || pollOn) return
     setError(null)
@@ -316,11 +437,12 @@ export function ComposeHost() {
 
   const usedPollOptions = pollOptions.map((o) => o.trim()).filter(Boolean)
   const overLimit = text.length + (cw ? spoiler.length : 0) > limits.maxChars
+  const chainValid = chain.every((c) => c.trim().length > 0 && c.length + (cw ? spoiler.length : 0) <= limits.maxChars)
   const uploading = media.some((d) => d.uploading)
   const missingAlt = media.some((d) => !d.uploading && !d.attachment.description?.trim())
   const pollValid = !pollOn || (usedPollOptions.length >= 2 && usedPollOptions.every((o) => o.length <= limits.pollMaxChars))
   const hasContent = text.trim().length > 0 || media.length > 0
-  const canSubmit = hasContent && !overLimit && !uploading && pollValid && !busy
+  const canSubmit = hasContent && !overLimit && chainValid && !uploading && pollValid && !busy
 
   async function submit() {
     if (!canSubmit) return
@@ -340,6 +462,7 @@ export function ComposeHost() {
     }
     if (replyTo) body.in_reply_to_id = replyTo.id
     if (media.length) body.media_ids = media.map((d) => d.attachment.id)
+    let policyPayload: Record<string, unknown> | undefined
     if (!editing && (replyPolicy !== 'default' || boostPolicy !== 'default' || favPolicy !== 'default')) {
       // If ANY policy is set, GTS normalizes unspecified sub-policies to
       // restrictive. Preserve intent by explicitly sending public for the
@@ -352,6 +475,7 @@ export function ComposeHost() {
       if (b) ip.can_reblog = b
       if (f) ip.can_favourite = f
       body.interaction_policy = ip
+      policyPayload = ip
     }
     if (pollOn && !editing) {
       body.poll = {
@@ -365,14 +489,32 @@ export function ComposeHost() {
         await api.value.put<Status>(`/api/v1/statuses/${editing.id}`, body)
         toast('Post updated')
       } else {
-        const created = await api.value.request<Status>('/api/v1/statuses', {
+        let created = await api.value.request<Status>('/api/v1/statuses', {
           method: 'POST',
           body,
           headers: { 'Idempotency-Key': crypto.randomUUID() },
         })
+        for (const extra of chain) {
+          const trimmed = extra.trim()
+          if (!trimmed) continue
+          const replyBody: Record<string, unknown> = {
+            status: trimmed,
+            sensitive: cw,
+            spoiler_text: cw ? spoiler : '',
+            visibility,
+            content_type: 'text/markdown',
+            in_reply_to_id: created.id,
+          }
+          if (policyPayload) replyBody.interaction_policy = policyPayload
+          created = await api.value.request<Status>('/api/v1/statuses', {
+            method: 'POST',
+            body: replyBody,
+            headers: { 'Idempotency-Key': crypto.randomUUID() },
+          })
+        }
         lastPosted.value = created
         clearDraft(sessionId)
-        toast('Posted')
+        toast(chain.length > 0 ? `Thread posted (${chain.length + 1} posts)` : 'Posted')
       }
       close()
     } catch (e) {
@@ -444,7 +586,12 @@ export function ComposeHost() {
             ref={textRef}
             class="textarea compose__text"
             value={text}
-            onInput={(e) => setText((e.target as HTMLInputElement).value)}
+            onInput={(e) => {
+              const ta = e.target as HTMLTextAreaElement
+              setText(ta.value)
+              updateTokenFromTextarea(ta)
+            }}
+            onClick={(e) => updateTokenFromTextarea(e.target as HTMLTextAreaElement)}
             onPaste={(e) => {
               const items = e.clipboardData?.items
               if (!items) return
@@ -461,6 +608,29 @@ export function ComposeHost() {
               }
             }}
             onKeyDown={(e) => {
+              if (suggest.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setSuggestIdx((i) => (i + 1) % suggest.length)
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setSuggestIdx((i) => (i - 1 + suggest.length) % suggest.length)
+                  return
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  applySuggestion(suggest[suggestIdx] ?? suggest[0])
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setSuggest([])
+                  setToken(null)
+                  return
+                }
+              }
               if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault()
                 void submit()
@@ -471,11 +641,91 @@ export function ComposeHost() {
             rows={6}
             aria-busy={busy || undefined}
           />
+          {suggest.length > 0 && (
+            <ul class="compose__suggest" role="listbox" aria-label="Autocomplete suggestions">
+              {suggest.map((item, idx) => (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={idx === suggestIdx}
+                    class={`compose__suggest-item${idx === suggestIdx ? ' is-active' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      applySuggestion(item)
+                    }}
+                  >
+                    {item.kind === 'account' && (
+                      <>
+                        <img src={item.avatar} alt="" width={24} height={24} loading="lazy" />
+                        <span class="compose__suggest-primary">{item.name}</span>
+                        <span class="compose__suggest-secondary">@{item.acct}</span>
+                      </>
+                    )}
+                    {item.kind === 'tag' && (
+                      <>
+                        <Icon name="hash" size={16} />
+                        <span class="compose__suggest-primary">#{item.name}</span>
+                      </>
+                    )}
+                    {item.kind === 'emoji' && (
+                      <>
+                        {item.url ? (
+                          <img src={item.url} alt="" width={20} height={20} loading="lazy" />
+                        ) : (
+                          <span class="compose__emoji-char">{item.char}</span>
+                        )}
+                        <span class="compose__suggest-primary">{item.label}</span>
+                      </>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
           <div class="compose__meta">
             <span class={`compose__count num${overLimit ? ' compose__count--over' : ''}`} aria-live="polite">
               {text.length + (cw ? spoiler.length : 0)} / {limits.maxChars}
             </span>
           </div>
+
+          {!editing && chain.length > 0 && (
+            <div class="compose__chain" aria-label="Chained thread posts">
+              {chain.map((part, idx) => {
+                const partOver = part.length + (cw ? spoiler.length : 0) > limits.maxChars
+                return (
+                  <div key={idx} class="compose__chain-item">
+                    <div class="compose__chain-head">
+                      <span class="compose__chain-label num">Post {idx + 2}</span>
+                      <span class={`compose__count num${partOver ? ' compose__count--over' : ''}`}>
+                        {part.length + (cw ? spoiler.length : 0)} / {limits.maxChars}
+                      </span>
+                      <button
+                        type="button"
+                        class="icon-btn compose__chain-remove"
+                        aria-label={`Remove post ${idx + 2}`}
+                        title={`Remove post ${idx + 2}`}
+                        onClick={() => setChain((c) => c.filter((_, j) => j !== idx))}
+                      >
+                        <Icon name="x" size={16} />
+                      </button>
+                    </div>
+                    <textarea
+                      class="textarea compose__text compose__chain-text"
+                      rows={4}
+                      value={part}
+                      placeholder={`Continue thread (post ${idx + 2})`}
+                      aria-label={`Post ${idx + 2} text`}
+                      onInput={(e) => {
+                        const val = (e.target as HTMLTextAreaElement).value
+                        setChain((c) => c.map((v, j) => (j === idx ? val : v)))
+                      }}
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           {media.length > 0 && (
             <ul class="compose__media">
@@ -633,19 +883,31 @@ export function ComposeHost() {
               <Icon name="smile" size={20} />
             </button>
             {!editing && (
-            <button
-              type="button"
-              class="icon-btn"
-              data-active={policyOpen || undefined}
-              onClick={() => setPolicyOpen((v) => !v)}
-              aria-label="Who can interact"
-              title="Who can interact"
-              aria-expanded={policyOpen}
-            >
-              <Icon name="sliders" size={20} />
-            </button>
-          )}
-          <label class="compose__visibility">
+              <button
+                type="button"
+                class="icon-btn"
+                data-active={policyOpen || undefined}
+                onClick={() => setPolicyOpen((v) => !v)}
+                aria-label="Who can interact"
+                title="Who can interact"
+                aria-expanded={policyOpen}
+              >
+                <Icon name="sliders" size={20} />
+              </button>
+            )}
+            {!editing && chain.length < 9 && (
+              <button
+                type="button"
+                class="icon-btn"
+                data-active={chain.length > 0 || undefined}
+                onClick={() => setChain((c) => [...c, ''])}
+                aria-label="Add post to thread"
+                title="Add post to thread"
+              >
+                <Icon name="plus" size={20} />
+              </button>
+            )}
+            <label class="compose__visibility">
               <span class="visually-hidden">Visibility</span>
               <select
                 class="select"
@@ -659,7 +921,15 @@ export function ComposeHost() {
               </select>
             </label>
             <button type="submit" class="btn btn--primary compose__submit" disabled={!canSubmit}>
-              {busy ? 'Publishing…' : editing ? 'Save changes' : replyTo ? 'Reply' : 'Post'}
+              {busy
+                ? 'Publishing…'
+                : editing
+                  ? 'Save changes'
+                  : chain.length > 0
+                    ? `Post thread (${chain.length + 1})`
+                    : replyTo
+                      ? 'Reply'
+                      : 'Post'}
             </button>
           </div>
 

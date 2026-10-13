@@ -236,3 +236,20 @@ export interface AccountCredentials extends Account {
   source: { note: string; fields: AccountField[]; privacy?: string; sensitive?: boolean; language?: string }
   role?: { name?: string; permissions?: string | number }
 }
+
+export interface TagInfo {
+  name: string
+  url?: string
+  history?: unknown[]
+  following?: boolean
+}
+
+export interface StatusEdit {
+  content: string
+  spoiler_text: string
+  sensitive: boolean
+  created_at: string
+  account: Account
+  media_attachments: MediaAttachment[]
+  emojis: Emoji[]
+}

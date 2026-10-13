@@ -5,8 +5,9 @@
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Fragment } from 'preact'
-import type { Status } from '../api/types'
+import type { Status, TagInfo } from '../api/types'
 import { api, activeSession } from '../state/auth'
+import { toast } from '../state/toast'
 import { onStatus, type StreamName } from '../state/streaming'
 import { getSeenTop, raiseSeenTop, isNewer, wasRecentlyActive, touchActivity } from '../state/readState'
 import { isHiddenBooster } from '../state/hideBoosts'
@@ -108,6 +109,8 @@ export function TimelinePage(props: TimelinePageProps) {
   const [nextMaxId, setNextMaxId] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [listTitle, setListTitle] = useState<string | null>(null)
+  const [tagFollowing, setTagFollowing] = useState<boolean | null>(null)
+  const [tagBusy, setTagBusy] = useState(false)
   const [visitMark, setVisitMark] = useState('')
   const [jumped, setJumped] = useState(false)
   const requestSeq = useRef(0)
@@ -223,6 +226,46 @@ export function TimelinePage(props: TimelinePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
+  // Resolve hashtag follow state for #/tags/:tag timelines.
+  useEffect(() => {
+    if (props.kind !== 'tag' || !props.tag) {
+      setTagFollowing(null)
+      return
+    }
+    let alive = true
+    setTagFollowing(null)
+    api.value
+      .get<TagInfo>(`/api/v1/tags/${encodeURIComponent(props.tag)}`)
+      .then((info) => {
+        if (alive) setTagFollowing(Boolean(info.following))
+      })
+      .catch(() => {
+        if (alive) setTagFollowing(null)
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+
+  async function toggleTagFollow() {
+    if (!props.tag || tagFollowing === null || tagBusy) return
+    setTagBusy(true)
+    const verb = tagFollowing ? 'unfollow' : 'follow'
+    try {
+      const info = await api.value.post<TagInfo>(
+        `/api/v1/tags/${encodeURIComponent(props.tag)}/${verb}`,
+      )
+      const next = Boolean(info.following)
+      setTagFollowing(next)
+      toast(next ? `Following #${props.tag}` : `Unfollowed #${props.tag}`)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : `Could not ${verb} #${props.tag}.`, 'error')
+    } finally {
+      setTagBusy(false)
+    }
+  }
+
   // Live updates: hold new posts behind a pill so reading position is stable.
   useEffect(() => {
     const stream = streamFor(props)
@@ -292,6 +335,17 @@ export function TimelinePage(props: TimelinePageProps) {
       <header class="view-header">
         <h1>{heading}</h1>
         <div class="view-header__actions">
+          {props.kind === 'tag' && tagFollowing !== null && (
+            <button
+              class={`btn${tagFollowing ? '' : ' btn--primary'}`}
+              disabled={tagBusy}
+              aria-pressed={tagFollowing}
+              onClick={() => void toggleTagFollow()}
+            >
+              <Icon name={tagFollowing ? 'check' : 'plus'} size={16} />
+              {tagFollowing ? 'Following' : 'Follow tag'}
+            </button>
+          )}
           <button
             class="icon-btn"
             aria-label="Refresh timeline"

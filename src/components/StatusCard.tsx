@@ -106,6 +106,11 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
           </span>
           <a class="status__time" href={`#/statuses/${status.id}`} title={formatAbsolute(status.created_at)}>
             <time dateTime={status.created_at}>{formatCompact(status.created_at)}</time>
+            {status.edited_at && (
+              <span class="status__edited" title={`Edited ${formatAbsolute(status.edited_at)}`}>
+                {' '}· edited
+              </span>
+            )}
           </a>
           {variant !== 'thread' && (
             <MoreMenu status={status} own={status.account.id === me} onUpdated={updated} onDeleted={onStatusDeleted} />

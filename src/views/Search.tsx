@@ -3,8 +3,9 @@
  * people, and hashtags. Queries that look like URLs resolve remote objects.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
-import type { Account, SearchResults } from '../api/types'
+import type { Account, SearchResults, TagInfo } from '../api/types'
 import { api } from '../state/auth'
+import { toast } from '../state/toast'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { formatCount } from '../util/time'
@@ -130,10 +131,13 @@ export function SearchView() {
       </div>
 
       {state === 'idle' && (
-        <div class="state-block">
-          <h2>Search the fediverse</h2>
-          <p>Find posts, people, and hashtags on your server. Paste a status or profile URL to open it here.</p>
-        </div>
+        <>
+          <FollowedTagsSection />
+          <div class="state-block">
+            <h2>Search the fediverse</h2>
+            <p>Find posts, people, and hashtags on your server. Paste a status or profile URL to open it here.</p>
+          </div>
+        </>
       )}
 
       {state === 'loading' && (
@@ -298,5 +302,65 @@ function AccountRow({ account }: { account: Account }) {
       </span>
       <span class="search__account-meta num">{formatCount(account.followers_count)} followers</span>
     </a>
+  )
+}
+
+function FollowedTagsSection() {
+  const [tags, setTags] = useState<TagInfo[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api.value
+      .get<TagInfo[]>('/api/v1/followed_tags')
+      .then((res) => {
+        if (alive) {
+          setTags(Array.isArray(res) ? res : [])
+          setLoaded(true)
+        }
+      })
+      .catch(() => {
+        if (alive) setLoaded(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  async function unfollow(name: string) {
+    try {
+      await api.value.post(`/api/v1/tags/${encodeURIComponent(name)}/unfollow`)
+      setTags((cur) => cur.filter((t) => t.name !== name))
+      toast(`Unfollowed #${name}`)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : `Could not unfollow #${name}.`, 'error')
+    }
+  }
+
+  if (!loaded || tags.length === 0) return null
+
+  return (
+    <section class="search__followed card" aria-labelledby="search-followed-h">
+      <h2 id="search-followed-h" class="search__followed-title">
+        <Icon name="hash" size={16} /> Followed hashtags
+      </h2>
+      <ul class="search__followed-list">
+        {tags.map((t) => (
+          <li key={t.name} class="search__followed-chip">
+            <a class="search__followed-link" href={`#/tags/${encodeURIComponent(t.name)}`}>
+              #{t.name}
+            </a>
+            <button
+              class="icon-btn search__followed-remove"
+              aria-label={`Unfollow #${t.name}`}
+              title={`Unfollow #${t.name}`}
+              onClick={() => void unfollow(t.name)}
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

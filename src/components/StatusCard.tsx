@@ -284,6 +284,15 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
   const favDenied = v.fav === 'denied'
   const approval = (verdict: PolicyVerdict) => verdict === 'approval' ? ' (will request approval)' : ''
 
+  /** Restartable pop-animation trigger for the action buttons. */
+  function pop(btn: HTMLButtonElement | null) {
+    if (!btn) return
+    btn.classList.remove('action--pop')
+    // Force a reflow so rapid re-taps restart the animation.
+    void btn.offsetWidth
+    btn.classList.add('action--pop')
+  }
+
   return (
     <div class="status__actions">
       <button
@@ -302,7 +311,10 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         aria-label={`${status.reblogged ? 'Undo boost' : 'Boost'}${approval(v.boost)}`}
         title={boostDenied ? 'The author has not allowed boosts of this post' : `${status.reblogged ? 'Undo boost' : 'Boost'}${approval(v.boost)}`}
         disabled={boostDenied}
-        onClick={() => toggleBoost(status, onUpdated).catch(() => {})}
+        onClick={(e) => {
+          pop(e.currentTarget)
+          toggleBoost(status, onUpdated).catch(() => {})
+        }}
       >
         <Icon name="repeat" size={18} />
         {status.reblogs_count > 0 && <span class="action__count num">{formatCount(status.reblogs_count)}</span>}
@@ -313,7 +325,10 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         aria-label={`${status.favourited ? 'Unlike' : 'Favourite'}${approval(v.fav)}`}
         title={favDenied ? 'The author has not allowed likes on this post' : `${status.favourited ? 'Unlike' : 'Favourite'}${approval(v.fav)}`}
         disabled={favDenied}
-        onClick={() => toggleFav(status, onUpdated).catch(() => {})}
+        onClick={(e) => {
+          pop(e.currentTarget)
+          toggleFav(status, onUpdated).catch(() => {})
+        }}
       >
         <Icon name="heart" size={18} />
         {status.favourites_count > 0 && <span class="action__count num">{formatCount(status.favourites_count)}</span>}
@@ -323,7 +338,10 @@ function ActionBar({ status, own, onUpdated }: { status: Status; own: boolean; o
         aria-pressed={status.bookmarked}
         aria-label={status.bookmarked ? 'Remove bookmark' : 'Bookmark'}
         title={status.bookmarked ? 'Remove bookmark' : 'Bookmark'}
-        onClick={() => toggleBookmark(status, onUpdated).catch(() => {})}
+        onClick={(e) => {
+          pop(e.currentTarget)
+          toggleBookmark(status, onUpdated).catch(() => {})
+        }}
       >
         <Icon name="bookmark" size={18} />
       </button>

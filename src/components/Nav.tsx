@@ -9,6 +9,7 @@ import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
 import { followRequestCount } from '../state/notifications'
 import { openCompose } from '../state/compose'
+import { scrollToTop } from '../util/scroll'
 import './Nav.css'
 
 interface NavItem {
@@ -50,6 +51,13 @@ function isActive(href: string, segments: string[]): boolean {
   return parts.every((p, i) => p === segments[i])
 }
 
+/** Tapping the destination you are already on scrolls it back to the top. */
+function reTapToTop(e: MouseEvent, active: boolean) {
+  if (!active || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+  e.preventDefault()
+  scrollToTop()
+}
+
 function NavButton({ item }: { item: NavItem }) {
   const active = isActive(item.href, route.value.segments)
   const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
@@ -58,6 +66,7 @@ function NavButton({ item }: { item: NavItem }) {
       href={'#' + item.href}
       class="nav-link"
       aria-current={active ? 'page' : undefined}
+      onClick={(e) => reTapToTop(e, active)}
     >
       <span class="nav-link__icon">
         <Icon name={item.icon} size={22} />
@@ -155,7 +164,13 @@ export function MobileTabs() {
       {MOBILE.map((item) => {
         const active = isActive(item.href, segments)
         return (
-          <a key={item.href} href={'#' + item.href} class="tab" aria-current={active ? 'page' : undefined}>
+          <a
+            key={item.href}
+            href={'#' + item.href}
+            class="tab"
+            aria-current={active ? 'page' : undefined}
+            onClick={(e) => reTapToTop(e, active)}
+          >
             <Icon name={item.icon} size={24} />
             <span>{item.label}</span>
           </a>

@@ -10,6 +10,7 @@ import { ToastHost } from './components/ToastHost'
 import { openCompose } from './state/compose'
 import { toast } from './state/toast'
 import { installKeyboardSheetFix } from './util/keyboard'
+import { installHeaderTapToTop } from './util/scroll'
 import { refreshFollowRequestCount } from './state/notifications'
 import { syncMarkersFromServer } from './state/markers'
 import { ShortcutsHost } from './components/Shortcuts'
@@ -17,6 +18,7 @@ import './shell.css'
 
 startRouter()
 installKeyboardSheetFix()
+installHeaderTapToTop()
 
 // An OAuth redirect lands on the SPA origin with ?code=&state= — consume it
 // before routing; without a session this goes to the login view regardless.

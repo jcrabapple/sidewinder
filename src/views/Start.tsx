@@ -104,8 +104,20 @@ export function normalizeServer(input: string): string {
   if (!/^https?:\/\//i.test(s)) s = 'https://' + s
   try {
     const u = new URL(s)
+    if (u.protocol !== 'https:' && u.hostname !== 'localhost') {
+      throw new Error('Server address must use HTTPS.')
+    }
+    const host = u.hostname.toLowerCase()
+    const isPrivateIp =
+      /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|169\.254\.|0\.)/.test(host) ||
+      host === 'localhost' ||
+      host === '::1'
+    if (isPrivateIp && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      throw new Error('Connecting to private network IP addresses is not permitted.')
+    }
     return u.origin
-  } catch {
+  } catch (e) {
+    if (e instanceof Error) throw e
     throw new Error(`"${input}" is not a valid server address.`)
   }
 }

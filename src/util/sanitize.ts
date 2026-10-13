@@ -25,7 +25,11 @@ export function sanitize(html: string, baseUrl: string): string {
   for (const a of tpl.content.querySelectorAll('a[href]')) {
     try {
       const url = new URL(a.getAttribute('href')!, baseUrl)
-      a.setAttribute('href', url.toString())
+      if (url.protocol !== 'http:' && url.protocol !== 'https:' && url.protocol !== 'mailto:') {
+        a.removeAttribute('href')
+      } else {
+        a.setAttribute('href', url.toString())
+      }
     } catch {
       a.removeAttribute('href')
     }

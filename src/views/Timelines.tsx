@@ -3,7 +3,7 @@
  * Cursor pagination via Api.page() (Link header max_id), live prepends via
  * the streaming client, and a pending-new-items pill instead of jumpy inserts.
  */
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import { Fragment } from 'preact'
 import type { Status, TagInfo } from '../api/types'
 import { api, activeSession } from '../state/auth'
@@ -85,6 +85,95 @@ const PAGE_SIZE = 30
  */
 const viewBoundary = new Map<string, string>()
 
+/**
+ * Timeline snapshots: what was on screen when the reader left a timeline
+ * (open a thread, a profile, any route) so coming BACK lands on the same
+ * post instead of a fresh load at the top. Module scope, so they survive the
+ * component unmounting on route change but not a page reload. Keyed per
+ * session+timeline. Restoring touches no read-state: the marks were already
+ * handled by the load that produced these items, and posts that arrived
+ * while away go behind the pending pill (fetchNewer), never above the
+ * reader's position.
+ */
+interface TimelineSnapshot {
+  items: Status[]
+  nextMaxId: string | null
+  /** The first card still visible below the sticky header… */
+  anchorId: string | null
+  /** …and its top edge in viewport px at capture time. */
+  anchorTop: number
+  /** Fallback when the anchor card is gone (deleted while away). */
+  scrollY: number
+  savedAt: number
+}
+
+const snapshots = new Map<string, TimelineSnapshot>()
+/** Past this, a return is a fresh visit: reload from the top. */
+const SNAPSHOT_TTL_MS = 30 * 60_000
+/** How long layout gets to settle (images above the anchor) while restoring. */
+const RESTORE_SETTLE_MS = 1200
+
+function freshSnapshot(viewKey: string): TimelineSnapshot | null {
+  const snap = snapshots.get(viewKey)
+  if (!snap) return null
+  if (Date.now() - snap.savedAt > SNAPSHOT_TTL_MS || snap.items.length === 0) {
+    snapshots.delete(viewKey)
+    return null
+  }
+  return snap
+}
+
+/** The first timeline card whose bottom clears the sticky view header. */
+function captureAnchor(): { anchorId: string | null; anchorTop: number } {
+  const header = document.querySelector<HTMLElement>('.timelines .view-header')
+  const headerBottom = header ? header.getBoundingClientRect().bottom : 0
+  const cards = document.querySelectorAll<HTMLElement>('.timelines__list [data-status-id]')
+  for (const el of cards) {
+    const r = el.getBoundingClientRect()
+    if (r.bottom > headerBottom + 1) return { anchorId: el.dataset.statusId ?? null, anchorTop: r.top }
+  }
+  return { anchorId: null, anchorTop: 0 }
+}
+
+/**
+ * Put the anchor card back where it was, re-applying for a short window
+ * while images above it finish laying out. Any reader input (touch, wheel,
+ * key) ends the settle loop so it never fights a deliberate scroll.
+ */
+function restoreScroll(snap: TimelineSnapshot): () => void {
+  let stopped = false
+  const stop = () => {
+    stopped = true
+  }
+  const opts = { passive: true, capture: true } as AddEventListenerOptions
+  const inputs = ['touchstart', 'wheel', 'keydown', 'mousedown'] as const
+  for (const ev of inputs) window.addEventListener(ev, stop, opts)
+  const apply = () => {
+    const el = snap.anchorId
+      ? document.querySelector<HTMLElement>(`.timelines__list [data-status-id="${CSS.escape(snap.anchorId)}"]`)
+      : null
+    if (el) {
+      const delta = el.getBoundingClientRect().top - snap.anchorTop
+      if (Math.abs(delta) >= 1) window.scrollTo(0, window.scrollY + delta)
+    } else {
+      window.scrollTo(0, snap.scrollY)
+    }
+  }
+  apply()
+  const until = performance.now() + RESTORE_SETTLE_MS
+  const tick = () => {
+    if (stopped || performance.now() > until) return cleanup()
+    apply()
+    requestAnimationFrame(tick)
+  }
+  const cleanup = () => {
+    stopped = true
+    for (const ev of inputs) window.removeEventListener(ev, stop, opts)
+  }
+  requestAnimationFrame(tick)
+  return cleanup
+}
+
 /** The newer of two ULID ids (empty strings allowed). */
 function newerId(a: string, b: string): string {
   if (!a) return b
@@ -102,11 +191,18 @@ export function TimelinePage(props: TimelinePageProps) {
   const title = titleFor(props)
   useTitle(title)
 
-  const [items, setItems] = useState<Status[]>([])
+  const key = `${props.kind}:${props.tag ?? ''}:${props.listId ?? ''}`
+  const session = activeSession.value?.id ?? ''
+  const viewKey = `${session}::${key}`
+
+  // A fresh snapshot for THIS mount seeds state directly, so the restored
+  // list paints on the first frame with no spinner flash or scroll jump.
+  const [mountSnap] = useState(() => freshSnapshot(viewKey))
+  const [items, setItems] = useState<Status[]>(mountSnap?.items ?? [])
   const [pending, setPending] = useState<Status[]>([])
-  const [state, setState] = useState<LoadState>('loading')
+  const [state, setState] = useState<LoadState>(mountSnap ? 'ready' : 'loading')
   const [error, setError] = useState<string | null>(null)
-  const [nextMaxId, setNextMaxId] = useState<string | null>(null)
+  const [nextMaxId, setNextMaxId] = useState<string | null>(mountSnap?.nextMaxId ?? null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [listTitle, setListTitle] = useState<string | null>(null)
   const [tagFollowing, setTagFollowing] = useState<boolean | null>(null)
@@ -115,8 +211,17 @@ export function TimelinePage(props: TimelinePageProps) {
   const [jumped, setJumped] = useState(false)
   const requestSeq = useRef(0)
 
-  const key = `${props.kind}:${props.tag ?? ''}:${props.listId ?? ''}`
-  const session = activeSession.value?.id ?? ''
+  // Snapshot bookkeeping. Refs, because the save runs from listeners and
+  // effect cleanups whose closures would otherwise hold stale state.
+  const itemsRef = useRef(items)
+  itemsRef.current = items
+  const nextMaxIdRef = useRef(nextMaxId)
+  nextMaxIdRef.current = nextMaxId
+  const anchorRef = useRef<{ anchorId: string | null; anchorTop: number; scrollY: number } | null>(null)
+  /** Snapshot waiting for its list to be in the DOM before scrolling to it. */
+  const restoreRef = useRef<TimelineSnapshot | null>(mountSnap)
+  /** Set when the mount already applied the snapshot for this key. */
+  const seededKeyRef = useRef<string | null>(mountSnap ? viewKey : null)
 
   async function loadFirst() {
     const seq = ++requestSeq.current
@@ -199,11 +304,117 @@ export function TimelinePage(props: TimelinePageProps) {
     }
   }
 
-  // Initial load + reload when the timeline identity changes.
+  /**
+   * After a snapshot restore: posts that arrived while the reader was away
+   * (the stream was unsubscribed) go behind the pending pill, so the list
+   * under the reader's thumb does not move. min_id pages forward from the
+   * newest restored post with no gap; a backlog larger than one page is
+   * left to the refresh button.
+   */
+  async function fetchNewer(newestId: string) {
+    const seq = requestSeq.current
+    try {
+      const page = await api.value.page<Status>(endpoint(props), {
+        query: { limit: 40, min_id: newestId, local: props.kind === 'local' ? true : undefined },
+        timeoutMs: timeoutFor(props),
+      })
+      if (seq !== requestSeq.current || page.items.length === 0) return
+      setPending((cur) => {
+        const seen = new Set(cur.map((s) => s.id))
+        const merged = [...cur, ...page.items.filter((s) => !seen.has(s.id) && s.id > newestId)]
+        return merged.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      })
+    } catch {
+      // Best-effort: the restored list is still correct, just not topped up.
+    }
+  }
+
+  // Track where the reader is, continuously, so leaving by any route saves
+  // the right post. Captured on scroll (rAF-throttled) and once more on
+  // hashchange, which fires before the route re-render tears down the list.
   useEffect(() => {
-    void loadFirst()
+    let frame = 0
+    const capture = () => {
+      if (!document.querySelector('.timelines__list')) return
+      anchorRef.current = { ...captureAnchor(), scrollY: window.scrollY }
+    }
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        capture()
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('hashchange', capture, true)
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('hashchange', capture, true)
+    }
+  }, [])
+
+  // Initial load + reload when the timeline identity changes. A fresh
+  // snapshot (same session + timeline, left < 30 min ago) is restored
+  // instead of refetched; the cleanup writes this key's snapshot on the way
+  // out, whether that is an unmount or a switch to another timeline.
+  useEffect(() => {
+    const myKey = viewKey
+    let snap: TimelineSnapshot | null = null
+    if (seededKeyRef.current === myKey) {
+      snap = mountSnap
+    } else {
+      snap = freshSnapshot(myKey)
+      if (snap) {
+        ++requestSeq.current
+        setItems(snap.items)
+        setNextMaxId(snap.nextMaxId)
+        setPending([])
+        setError(null)
+        setState('ready')
+        restoreRef.current = snap
+      }
+    }
+    seededKeyRef.current = null
+    if (snap) {
+      anchorRef.current = { anchorId: snap.anchorId, anchorTop: snap.anchorTop, scrollY: snap.scrollY }
+      void fetchNewer(snap.items[0].id)
+    } else {
+      anchorRef.current = null
+      void loadFirst()
+    }
+    return () => {
+      const list = itemsRef.current
+      const anchor = anchorRef.current
+      if (list.length === 0) {
+        snapshots.delete(myKey)
+        return
+      }
+      snapshots.set(myKey, {
+        items: list,
+        nextMaxId: nextMaxIdRef.current,
+        anchorId: anchor?.anchorId ?? null,
+        anchorTop: anchor?.anchorTop ?? 0,
+        scrollY: anchor?.scrollY ?? 0,
+        savedAt: Date.now(),
+      })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
+
+  // Scroll back to the saved post once the restored list is in the DOM.
+  // Layout effect, so the first painted frame is already in position. The
+  // settle loop outlives later renders (the pending top-up re-renders) and
+  // is only cut short by unmount or reader input.
+  const settleStopRef = useRef<(() => void) | null>(null)
+  useLayoutEffect(() => {
+    const snap = restoreRef.current
+    if (!snap || state !== 'ready' || items.length === 0) return
+    restoreRef.current = null
+    settleStopRef.current?.()
+    settleStopRef.current = restoreScroll(snap)
+  })
+  useEffect(() => () => settleStopRef.current?.(), [])
 
   // Resolve the list title for the header.
   useEffect(() => {

@@ -227,6 +227,7 @@ export function TimelinePage(props: TimelinePageProps) {
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
+    setJumped(false)
     setItems([])
     setPending([])
     setNextMaxId(null)
@@ -539,7 +540,46 @@ export function TimelinePage(props: TimelinePageProps) {
   // where the new/old divider falls.
   const unseenCount = pending.length + visibleItems.filter((s) => isNewer(s.id, visitMark)).length
   const firstSeenIndex = visitMark ? visibleItems.findIndex((s) => !isNewer(s.id, visitMark)) : -1
+  // `jumped` = the reader has reached the unread posts, by the pill OR by
+  // simply having the top of the list on screen (see the effect below).
+  // Pending (stream / away top-up) posts are not in the list yet, so their
+  // pill always shows.
   const showPill = unseenCount > 0 && (!jumped || pending.length > 0)
+
+  // In-list unread posts are always the FIRST cards (newest first), so once
+  // the top of the list has been on screen the reader has already seen what
+  // the pill would jump to. Check before paint (a fresh load starts at the
+  // top, so the pill never even flashes) and again on scroll for a load that
+  // started scrolled down. Once seen, it stays dismissed for this visit.
+  const listUnseen = unseenCount - pending.length
+  useLayoutEffect(() => {
+    if (jumped || listUnseen === 0 || state !== 'ready') return
+    const topVisible = () => {
+      const first = document.querySelector('.timelines__list')?.firstElementChild
+      if (!first) return false
+      const header = document.querySelector('.timelines .view-header')
+      const headerBottom = header ? header.getBoundingClientRect().bottom : 0
+      const r = first.getBoundingClientRect()
+      return r.bottom > headerBottom + 1 && r.top < window.innerHeight
+    }
+    if (topVisible()) {
+      setJumped(true)
+      return
+    }
+    let frame = 0
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        if (topVisible()) setJumped(true)
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', onScroll)
+    }
+  }, [jumped, listUnseen, state])
 
   return (
     <div class="timelines">

@@ -16,6 +16,16 @@
   font-weight: 600;
 }
 
+.status__pinned-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-2) 34px;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
 .status__boost-by {
   border: none;
   background: none;

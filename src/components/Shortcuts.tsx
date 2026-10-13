@@ -31,22 +31,30 @@ const SECTIONS: { title: string; rows: ShortcutRow[] }[] = [
       { keys: 'g l', action: 'Local timeline' },
       { keys: 'g f', action: 'Federated timeline' },
       { keys: 'g n', action: 'Notifications' },
+      { keys: 'g c', action: 'Catch-up' },
+      { keys: 'g p', action: 'Your profile' },
       { keys: 'g s', action: 'Lists' },
       { keys: 'g v', action: 'Favourites' },
       { keys: 'g b', action: 'Bookmarks' },
+      { keys: 'g r', action: 'Follow requests' },
+      { keys: 'g w', action: 'Wrapped' },
       { keys: 'g ,', action: 'Settings' },
     ],
   },
 ]
 
-const CHORDS: Record<string, string> = {
+const CHORDS: Record<string, string | (() => string)> = {
   h: '/home',
   l: '/local',
   f: '/federated',
   n: '/notifications',
+  c: '/catchup',
+  p: () => (activeSession.value?.account.id ? `/accounts/${activeSession.value.account.id}` : '/'),
   s: '/lists',
   v: '/favourites',
   b: '/bookmarks',
+  r: '/follow_requests',
+  w: '/wrapped',
   ',': '/settings',
 }
 
@@ -74,10 +82,11 @@ export function ShortcutsHost() {
       if (!activeSession.value) return
 
       if (chordPending.current) {
-        const dest = CHORDS[e.key]
+        const entry = CHORDS[e.key]
         clearChord()
-        if (dest) {
+        if (entry) {
           e.preventDefault()
+          const dest = typeof entry === 'function' ? entry() : entry
           navigate(dest)
         }
         return

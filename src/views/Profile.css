@@ -137,6 +137,26 @@
 
 .profile__counts strong { color: var(--fg); font-weight: 700; }
 
+.profile__count-link {
+  color: inherit;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  border-radius: var(--radius-s);
+}
+
+.profile__count-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  color: var(--fg);
+}
+
+.profile__count-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .profile__tabs {
   display: flex;
   gap: var(--sp-1);

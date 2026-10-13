@@ -9,11 +9,12 @@ import { ListsView } from './Lists'
 import { WrappedView } from './Wrapped'
 import { CatchUpView } from './CatchUp'
 import { FollowRequestsView } from './FollowRequests'
+import { AccountRelationshipsView } from './AccountRelationships'
 import { SettingsView } from './Settings'
 import { navigate } from '../router'
 
 export function AppRoutes({ route }: { route: Route }) {
-  const [seg0, seg1] = route.segments
+  const [seg0, seg1, seg2] = route.segments
 
   switch (seg0) {
     case undefined:
@@ -35,7 +36,11 @@ export function AppRoutes({ route }: { route: Route }) {
     case 'statuses':
       return seg1 ? <ThreadView id={seg1} /> : <NotFound path={route.href} />
     case 'accounts':
-      return seg1 ? <ProfileView id={seg1} /> : <NotFound path={route.href} />
+      if (!seg1) return <NotFound path={route.href} />
+      if (seg2 === 'followers' || seg2 === 'following') {
+        return <AccountRelationshipsView id={seg1} kind={seg2} />
+      }
+      return <ProfileView id={seg1} />
     case 'search':
       return <SearchView />
     case 'favourites':

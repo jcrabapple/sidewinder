@@ -1,0 +1,144 @@
+/* Account relationships view (followers / following) */
+.account-rel {
+  padding-bottom: var(--sp-8);
+}
+
+.account-rel__title-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-rel__title-wrap h1 {
+  font-size: var(--fs-l);
+  line-height: 1.2;
+}
+
+.account-rel__sub {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-rel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.account-card {
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.account-card:hover {
+  background-color: var(--surface-2);
+}
+
+.account-card__top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.account-card__avatar-link {
+  flex: none;
+  border-radius: 50%;
+}
+
+.account-card__avatar {
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.account-card__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-card__name {
+  color: var(--fg);
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.account-card__name:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.account-card__handle {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.account-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+  color: var(--fg-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.account-card__follow-btn {
+  flex: none;
+  min-height: 44px;
+  min-width: 84px;
+  padding: 0 var(--sp-4);
+  font-size: var(--fs-s);
+}
+
+.account-card__follow-btn.is-following {
+  background: var(--surface-3);
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+.account-card__follow-btn.is-following:hover {
+  background: var(--surface-2);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.account-card__follow-btn.is-requested {
+  background: var(--surface-3);
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
+.account-card__bio {
+  margin-top: var(--sp-2);
+  padding-left: calc(46px + var(--sp-3));
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  line-height: var(--lh-body);
+}
+
+.account-rel__more {
+  margin: var(--sp-4) auto;
+  min-height: 44px;
+}

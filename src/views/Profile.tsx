@@ -73,16 +73,26 @@ export function ProfileView({ id }: { id: string }) {
       setLoadingMore(true)
     }
     try {
-      const page = await api.value.page<Status>(`/api/v1/accounts/${encodeURIComponent(id)}/statuses`, {
-        query: {
-          exclude_replies: activeTab === 'posts' ? true : undefined,
-          only_media: activeTab === 'media' ? true : undefined,
-          limit: 20,
-          max_id: reset ? undefined : (nextMaxId ?? undefined),
-        },
-      })
+      const [pinnedPosts, page] = await Promise.all([
+        reset && activeTab === 'posts'
+          ? api.value
+              .get<Status[]>(`/api/v1/accounts/${encodeURIComponent(id)}/statuses`, { pinned: true })
+              .catch(() => [])
+          : Promise.resolve([]),
+        api.value.page<Status>(`/api/v1/accounts/${encodeURIComponent(id)}/statuses`, {
+          query: {
+            exclude_replies: activeTab === 'posts' ? true : undefined,
+            only_media: activeTab === 'media' ? true : undefined,
+            limit: 20,
+            max_id: reset ? undefined : (nextMaxId ?? undefined),
+          },
+        }),
+      ])
       if (seq !== requestSeq.current) return
-      setStatuses((cur) => (reset ? page.items : [...cur, ...page.items]))
+      const pinnedList = (pinnedPosts || []).map((p) => ({ ...p, pinned: true }))
+      const pinnedIds = new Set(pinnedList.map((p) => p.id))
+      const freshItems = [...pinnedList, ...page.items.filter((item) => !pinnedIds.has(item.id))]
+      setStatuses((cur) => (reset ? freshItems : [...cur, ...page.items.filter((item) => !pinnedIds.has(item.id))]))
       setNextMaxId(page.nextMaxId)
       setListState('ready')
     } catch (e) {
@@ -192,8 +202,12 @@ export function ProfileView({ id }: { id: string }) {
 
       <div class="profile__counts">
         <span><strong class="num">{formatCount(account.statuses_count)}</strong> posts</span>
-        <span><strong class="num">{formatCount(account.following_count)}</strong> following</span>
-        <span><strong class="num">{formatCount(account.followers_count)}</strong> followers</span>
+        <a class="profile__count-link" href={`#/accounts/${account.id}/following`}>
+          <strong class="num">{formatCount(account.following_count)}</strong> following
+        </a>
+        <a class="profile__count-link" href={`#/accounts/${account.id}/followers`}>
+          <strong class="num">{formatCount(account.followers_count)}</strong> followers
+        </a>
       </div>
 
       {own && <InsightsPanel accountId={account.id} />}

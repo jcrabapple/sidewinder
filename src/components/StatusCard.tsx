@@ -13,7 +13,7 @@ import { settings } from '../state/settings'
 import { openCompose } from '../state/compose'
 import { navigate } from '../router'
 import { toast } from '../state/toast'
-import { toggleFav, toggleBoost, toggleBookmark, deleteStatus } from '../state/statusActions'
+import { toggleFav, toggleBoost, toggleBookmark, togglePin, toggleMuteStatus, deleteStatus } from '../state/statusActions'
 import { policySummaries, policyVerdicts, type PolicyVerdict } from '../util/policy'
 import { Icon } from '../components/Icon'
 import { MediaGrid } from './MediaGrid'
@@ -77,6 +77,12 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
             {renderName(outer.account.display_name || outer.account.username, outer.account.emojis)}
           </button>
           <span>boosted</span>
+        </div>
+      )}
+      {status.pinned && !boosted && (
+        <div class="status__pinned-line">
+          <Icon name="pin" size={13} />
+          <span>Pinned post</span>
         </div>
       )}
       <div class="status__row">
@@ -341,6 +347,12 @@ function MoreMenu({ status, own, onUpdated, onDeleted }: { status: Status; own: 
     } else if (act === 'original') {
       window.open(status.url ?? status.uri, '_blank', 'noopener')
       close()
+    } else if (act === 'mute-conv') {
+      close()
+      toggleMuteStatus(status, onUpdated).catch(() => {})
+    } else if (act === 'pin') {
+      close()
+      togglePin(status, onUpdated).catch(() => {})
     } else if (act === 'edit') {
       close()
       openCompose({ editing: status })
@@ -352,7 +364,7 @@ function MoreMenu({ status, own, onUpdated, onDeleted }: { status: Status; own: 
 
   return (
     <div class="status__more">
-      <button class="icon-btn" aria-haspopup="menu" aria-expanded={open} aria-label="More options" onClick={() => setOpen(!open)}>
+      <button class="icon-btn" aria-haspopup="menu" aria-expanded={open} aria-label="More options" title="More options" onClick={() => setOpen(!open)}>
         <Icon name="more" size={18} />
       </button>
       {open && (
@@ -363,7 +375,15 @@ function MoreMenu({ status, own, onUpdated, onDeleted }: { status: Status; own: 
           <button role="menuitem" data-act="original">
             <Icon name="external-link" size={16} /> Open on server
           </button>
+          <button role="menuitem" data-act="mute-conv">
+            <Icon name="volume-x" size={16} /> {status.muted ? 'Unmute conversation' : 'Mute conversation'}
+          </button>
           {own && <div role="separator" />}
+          {own && (
+            <button role="menuitem" data-act="pin">
+              <Icon name="pin" size={16} /> {status.pinned ? 'Unpin from profile' : 'Pin to profile'}
+            </button>
+          )}
           {own && (
             <button role="menuitem" data-act="edit">
               <Icon name="pencil" size={16} /> Edit

@@ -301,6 +301,17 @@
 .status--timeline,
 .status--compact {
   cursor: pointer;
+  /* Chrome Android paints its tap-highlight over the whole clickable card,
+     even for taps that land on an action button inside it, so every
+     favourite/boost flashed the entire post. The property inherits, which
+     clears it for the card's links and buttons too; they get their own
+     pressed state below. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Pressed feedback for the action bar, replacing the native highlight. */
+.status__actions .action:active:not(:disabled) {
+  background: var(--surface-2);
 }
 
 .status--timeline a,

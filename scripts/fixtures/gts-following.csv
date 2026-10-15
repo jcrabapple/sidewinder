@@ -1,0 +1,6 @@
+Account address,Show boosts,Notify on new posts,Languages
+zed@localhost:18080,true,false,
+yara@goth.example,true,true,
+xenia@example.org,false,false,
+walter@gts.example,true,false,
+vera@localhost:18080,false,true,

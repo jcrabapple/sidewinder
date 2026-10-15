@@ -1,0 +1,4 @@
+Account address,Hide notifications
+loud@example.org,true
+quieter@gts.example,false
+noisy@localhost:18080,true

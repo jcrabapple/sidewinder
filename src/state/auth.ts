@@ -86,10 +86,13 @@ export async function fetchAccount(base: string, token: string): Promise<Account
 }
 
 export function logout(id?: string) {
+  const target = id ?? activeId.value ?? ''
   void closeStreams()
   void import('./relationships').then((m) => m.clearRelationships()).catch(() => {})
   void import('./hideBoosts').then((m) => m.resetHiddenBoosters()).catch(() => {})
-  removeSession(id ?? activeId.value ?? '')
+  // Watched import jobs belong to the signed-out session: stop their polling and forget them.
+  void import('./importer').then((m) => m.clearJobsFor(target)).catch(() => {})
+  removeSession(target)
 }
 
 /** Tear down live streams; dynamic import avoids the auth↔streaming cycle. */

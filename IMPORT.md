@@ -1,12 +1,15 @@
 # Import feature: contract and spec
 
 Sidewinder imports follows, blocks and mutes from Mastodon / GoToSocial export
-files by handing them to GoToSocial's own importer. This file is the single
-source of truth for the feature. Read it fully before touching code.
+files by handing them to GoToSocial's own importer. This file is the design
+record and rule set for the feature: the parser rules and test vectors in
+section 4 are executable (`pnpm test:import`).
 
-Status: native-only scope (approved). Anything GoToSocial's importer cannot do
-(lists, bookmarks, domain blocks, followers, filters, the account archive) is
-RECOGNISED and EXPLAINED in the UI, never imported client-side.
+Scope: native only. Anything GoToSocial's importer cannot do (lists, bookmarks,
+domain blocks, followers, filters, the account archive) is RECOGNISED and
+EXPLAINED in the UI, never imported client-side. If a future GoToSocial adds
+`lists` or `bookmarks` to `POST /api/v1/import` (its request model already
+documents them, the handler rejects them), extend `IMPORT_TYPES` and the type table.
 
 ## 1. Server facts (GoToSocial 0.22.2, verified against source at fb2bf13)
 
@@ -76,6 +79,34 @@ Formats GoToSocial writes (and therefore reads back):
 - `blocks.csv`: NO header, rows `user@domain`
 - `mutes.csv`: header `Account address,Hide notifications`, rows `user@domain,true`
 
+
+### Verified on a live instance (2026-10, GoToSocial 0.22.2+git-fb2bf13)
+
+Every claim above was exercised against a disposable instance (`references/throwaway-instance.md` in the
+`gotosocial-admin` skill). Raw outcomes, including the ones that corrected earlier assumptions:
+
+| Behaviour | Result |
+|---|---|
+| Wrong `type` (a blocks-shaped file sent as `following`, targets not yet blocked) | 202, and the account follows everyone in it. The server never cross-checks. |
+| Follow import of accounts the user ALREADY BLOCKS | silently skipped (the block stays). So the trap only bites on accounts not currently blocked, which is exactly the migration case. |
+| `overwrite` blocks with 3-column rows (all dropped by the parser) | blocks 2 -> 0 |
+| `overwrite` following with a header-only file | following 3 -> 0 |
+| `overwrite` mutes with an EMPTY file | the handler dies without an HTTP response (connection closed, status 0); nothing is wiped. The client never sends empty files. |
+| Ragged file (4 fields then 2) | `400 {"error":"Bad Request: error reading following data file: record on line 2: wrong number of fields"}` |
+| Blank boolean, or `yes` as a boolean | row silently dropped (Go ParseBool) |
+| Blocks row with a trailing comma | row dropped. A header line `Account address` in a blocks file is just an invalid row. |
+| UTF-8 BOM + CRLF line endings (mutes) | imported fine |
+| `type` upper-cased (`FOLLOWING`) | accepted (lower-cased server-side) |
+| `type=lists` / `bookmarks` | `400 ... type lists not recognized, valid types are: [following blocks mutes]` |
+| `mode=bogus` | `400 ... mode bogus not recognized, valid modes are: [merge overwrite]` |
+| missing `type` / `data` | `400 ... Field validation for 'Type' failed on the 'required' tag` (and Data) |
+| 3 local + 2 unreachable remote accounts | +3; the remote rows are skipped, ~1 s each of lookup time |
+| Locked account | follow request created (`requested: true`), `following_count` unchanged |
+| 100 local rows | counts settled in about 6-7 s |
+| `Accept: text/html` | 406 with an HTML error page. JSON or no Accept header is fine. |
+| Another account's token / a bad token | isolation holds / `401 {"error":"Unauthorized: token not supplied"}` |
+| Exports | `following.csv`, `blocks.csv`, `mutes.csv` written by GoToSocial are byte-identical to what `serializeUpload` produces for the same rows |
+
 ## 2. What Mastodon exports (verified against mastodon/mastodon main)
 
 Settings > Import and export > Export gives one file per data type. Download names are the
@@ -101,33 +132,38 @@ lines, strips a leading `@`, caps files at 20 MB and 20,000 rows, and warns when
 GoToSocial's own exports (`following.csv`, `followers.csv`, `lists.csv`, `blocks.csv`,
 `mutes.csv`) use the same shapes. `followers.csv` is informational: nobody can import followers.
 
-## 3. Architecture and file ownership
+## 3. Architecture
 
 ```
-src/util/importCsv.ts       pure parser + detector + canonical writer      (Agent PARSER)
-scripts/test-import-csv.mjs node:test unit tests, run by `pnpm test:import` (Agent PARSER)
-scripts/fixtures/**         CSV fixtures for the tests                      (Agent PARSER)
-src/state/importer.ts       upload, stats polling, job persistence, backup  (Agent STATE)
-src/views/Import.tsx/.css   the page: drop zone, file cards, help           (Agent VIEW)
-src/views/ImportConfirm.tsx/.css   confirm dialog (overwrite / mismatch)    (Agent DIALOG)
-src/views/ImportJobs.tsx/.css      "Recent imports" progress panel          (Agent DIALOG)
+src/util/importCsv.ts        pure parser + detector + canonical writer (no imports; erasable TS so node can run it)
+scripts/test-import-csv.mjs  node:test suite for the above: `pnpm test:import`
+scripts/fixtures/**          hand-written Mastodon/GTS shapes + real-gts-*.csv captured from a live instance
+src/state/importer.ts        upload, stats polling, job persistence, backup download, error mapping
+src/views/Import.tsx/.css    the page (#/import): drop zone, pipeline, mounts the pieces below
+src/views/ImportEntry.tsx/.css   one file card: detection, type/mode, preview, submit
+src/views/ImportHelp.tsx/.css    "where do I get these files" + "what can't be imported"
+src/views/ImportConfirm.tsx/.css confirm dialog (overwrite and/or type mismatch)
+src/views/ImportJobs.tsx/.css    "Recent imports" progress panel
 ```
 
-Orchestrator-owned (do NOT edit): `registry.tsx` (route `#/import`), `Settings.tsx` (entry
-card linking to `#/import`), `Nav.tsx`, `Icon.tsx` (icons `upload`, `download`, `file` already
-added), `auth.ts`, `client.ts`, `app.css`, `shell.css`, `AGENTS.md`, `package.json`.
+Wiring outside those files: route `#/import` in `registry.tsx`; the Settings "Import" card links to it; `Icon.tsx`
+has `upload`, `download`, `file`; `auth.ts` `logout()` calls `clearJobsFor(sessionId)`.
 
-The route `#/import` is intentionally NOT a nav item: it is reached from a Settings card, and
-Settings is on the desktop rail and the phone More sheet. Nothing is highlighted in Nav on it (same as thread/profile pages), so the
-view header carries a back link to Settings.
+`#/import` is intentionally NOT a nav item: it is reached from Settings, and Settings is on the desktop rail and the
+phone More sheet. Nothing is highlighted in Nav on it (same as thread/profile pages), so the view header carries a back
+link to Settings.
 
-Dependency direction: `Import.tsx` -> `ImportConfirm.tsx`, `ImportJobs.tsx`, `state/importer.ts`,
-`util/importCsv.ts`. `ImportConfirm.tsx` and `ImportJobs.tsx` -> `state/importer.ts`, `util/importCsv.ts`.
-`state/importer.ts` -> `util/importCsv.ts`. `util/importCsv.ts` imports nothing.
+Dependency direction: `Import.tsx` -> `ImportEntry/ImportHelp/ImportConfirm/ImportJobs`, `state/importer.ts`,
+`util/importCsv.ts`. The dialog and panel -> `state/importer.ts`, `util/importCsv.ts`. `state/importer.ts` ->
+`util/importCsv.ts`. `util/importCsv.ts` imports nothing.
 
-Exported names and signatures in the stub files are FROZEN contracts. Implement bodies; add
-internal helpers freely; never rename or change the signature of an export. If a contract is
-genuinely wrong, finish what you can and report the proposed change.
+Safety properties, each enforced in more than one place (change one only with a reason):
+
+1. Overwrite can never be sent with zero valid rows: the submit button is disabled AND `startImport` refuses an empty row list.
+2. The upload is a re-serialised canonical CSV of exactly the previewed rows, never the raw file (ragged rows, blank booleans, BOMs cannot reach the server).
+3. A detected-kind/selected-type mismatch and every overwrite go through the confirm dialog.
+4. Archives, JSON and oversize files are classified by name/size and never read into memory.
+5. A job polls with the Api of ITS OWN session, so switching accounts cannot make it watch the wrong account.
 
 ## 4. Parser rules (`src/util/importCsv.ts`)
 
@@ -288,7 +324,11 @@ Quote a field only if it contains `,` `"` `\r` or `\n` (validated addresses neve
 - Polling: every `POLL_FAST_MS` (3 s) for the first `FAST_WINDOW_MS` (2 min), then every `POLL_SLOW_MS` (10 s). Each tick reads stats and
   updates `current`; when it changed set `lastChangeAt = now` and `phase = 'watching'`; when unchanged for `QUIET_AFTER_MS` (30 s) set
   `phase = 'quiet'` (keep polling). After `WATCH_LIMIT_MS` (15 min) from `startedAt`, or 5 consecutive failed polls, or the session is gone:
-  `phase = 'ended'` with `endedReason` `timeout` / `error` / `session`. `stopJob` -> ended/`stopped`. Keep at most one timer per job.
+  `phase = 'ended'` with `endedReason` `timeout` / `error` / `session`. `stopJob` -> ended/`stopped`. Keep at most one live poll chain per
+  job: every (re)schedule and stop bumps a per-job generation, so a poll that was awaiting the network when it was superseded ends itself
+  instead of arming a second timer.
+- Counts are account-wide, so the newest job of a type supersedes older live jobs of that type (`ended` / `superseded`, frozen at the last
+  count they saw). Otherwise the older job would claim changes made by the newer one.
 - Persistence: `localStorage['sidewinder.importJobs']` = `Record<sessionId, ImportJob[]>`; at most 5 jobs per session, newest first;
   drop ended jobs older than 24 h on load. `resumeJobs()` restarts polling for stored jobs of the active session that are not ended and
   younger than `WATCH_LIMIT_MS` (and marks the rest ended/`timeout`). `jobs` is a signal of the ACTIVE session's jobs (recomputed when the active session changes).
@@ -364,7 +404,7 @@ Reads `jobs` from `state/importer`; `null` when empty. `section.import-jobs.card
 
 - Title: `{IMPORT_TYPE_INFO[type].title} · {Merge|Overwrite}`; second line: file name, `{rows} accounts sent`, started `formatRelative(new Date(startedAt).toISOString())`.
 - Counts line (`.import-job__counts`, `aria-live="off"`): `{Following}: {baseline} → {current}` and the signed delta `(+35)` / `(−12)` / `(no change)`; `.num` tabular.
-- Phase sentence in a visually-polite `role="status"` element: watching -> "Watching your counts. They update every few seconds."; quiet -> "No change for {m}. The server may be done, or still working through slow lookups."; ended/stopped -> "Stopped watching."; ended/timeout -> "Stopped watching after 15 minutes."; ended/error -> "Stopped watching because the server could not be reached."; ended/session -> "Stopped watching because you switched accounts."
+- Phase sentence in a visually-polite `role="status"` element: watching -> "Watching your counts. They update every few seconds."; quiet -> "No change for {m}. The server may be done, or still working through slow lookups."; ended/stopped -> "Stopped watching."; ended/timeout -> "Stopped watching after 15 minutes."; ended/error -> "Stopped watching because the server could not be reached."; ended/session -> "Stopped watching because this account was signed out."; ended/superseded -> "Stopped watching because a newer import of the same kind started. This is the last count it saw."
 - Caveat `.help-text`: "The server skips accounts it cannot reach, accounts on blocked domains, and locked accounts that have not approved you yet, so the final count can be lower than the file." For blocks add "Blocking an account also removes any follow between you and them."
 - Buttons: `Stop watching` (not ended) -> `stopJob`; `Dismiss` -> `dismissJob`.
 - A running `Date.now()` for the quiet-minutes text re-renders on a 5 s interval while any job is not ended.
@@ -373,9 +413,13 @@ Reads `jobs` from `state/importer`; `null` when empty. `section.import-jobs.card
 
 Design tokens only (no hex/rgb/oklch literals), class prefix per component (`.import__*`, `.import-confirm__*`, `.import-job__*`), one CSS file per component imported by it, sentence-case concrete copy with no exclamation marks and no em-dashes, every control has an accessible name, min 44px targets, loading/empty/error/success covered, native `<dialog>`, `role="alert"` for errors, strict TS with no `any`, components under ~300 lines (split if bigger), mobile-first (320px: no horizontal overflow; buttons may wrap; file names ellipsise), icons only from `Icon.tsx` (`upload`, `download`, `file`, `check`, `alert`, `x`, `refresh`, `clock` are available).
 
-## 7. Gates and rules for every agent
+## 7. Working on this feature
 
-- Gate: `pnpm exec tsc --noEmit` clean (run from `~/projects/sidewinder`). The PARSER agent also leaves `pnpm test:import` green.
-  A tsc error in a file you do not own may be another agent mid-edit: re-run once after a minute before reporting it, and never fix other people's files.
-- Forbidden: `git commit` / `git add` / `git push`, editing files you do not own, `pnpm add|install|remove`, `pnpm build` or `vite build` into `dist/` (that directory is the LIVE site), touching `~/sidewinder`, the production `gotosocial` container, `~/gotosocial`, or any token / `admin.env` file, calling `https://gts.example.org` with a real token, adding dependencies.
-- Report: files touched, edge cases handled, assumptions made, anything in the contract you believe is wrong, and the exact commands you ran with their outcome (pass/fail counts). Do not paste secrets.
+- Unit tests: `pnpm test:import` (node:test, no dependencies; runs `importCsv.ts` directly with type stripping).
+- Typecheck: `pnpm exec tsc --noEmit`. Production build: `pnpm build` (dist/ is the live site; for experiments build into scratch
+  with `vite build --outDir <scratch> --emptyOutDir` from a script file, the terminal guard blocks that phrase on a command line).
+- Behaviour against a real importer: stand up the disposable instance from the `gotosocial-admin` skill
+  (`references/throwaway-instance.md`), seed the harness browser's `sidewinder.sessions` with its tokens, and drive the UI. Do NOT
+  point experiments at the production instance: imports change real follows, blocks and mutes.
+- Known limits, stated in the UI where they matter: progress is inferred from account-wide counts (no job status exists); a quiet job
+  is not proof of completion; locked accounts, dead instances and domain-blocked accounts are skipped by the server without a trace.

@@ -1,0 +1,85 @@
+/* "Recent imports" progress panel (IMPORT.md section 6 JobsPanel). */
+
+.import-jobs {
+  padding: var(--sp-4);
+}
+
+.import-jobs h2 {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-l);
+  letter-spacing: var(--tracking-display);
+}
+
+.import-jobs__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.import-job {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.import-job__title {
+  margin: 0;
+  font-size: var(--fs-m);
+  font-weight: 600;
+}
+
+.import-job__meta {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.import-job__counts {
+  margin: var(--sp-1) 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.import-job__count {
+  color: var(--fg-muted);
+}
+
+.import-job__delta {
+  color: var(--fg-muted);
+}
+
+.import-job__phase {
+  margin: 0;
+  font-size: var(--fs-s);
+}
+
+.import-job__caveat {
+  margin: 0;
+}
+
+.import-job__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.import-job__actions .btn {
+  min-height: 44px;
+}
+
+/* Ended jobs read as finished, not live. */
+.import-job[data-phase='ended'] {
+  opacity: 0.75;
+}

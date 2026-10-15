@@ -1,0 +1,117 @@
+/* Import page layout */
+.import {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.import__intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.import__intro > p {
+  margin: 0;
+}
+
+.import__now {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+}
+
+.import__now .num {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* Drop zone */
+.import__drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-5);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-l);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.import__drop:hover {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.import__drop:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.import__drop.is-dragover {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.import__drop[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.import__drop .help-text {
+  margin-top: 0;
+}
+
+.import__drop-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+}
+
+.import__drop-secondary {
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+}
+
+/* File entries */
+.import__entries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* What can't be imported */
+.import__limits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.import__limits h2 {
+  margin: 0;
+  font-size: var(--fs-m);
+  letter-spacing: var(--tracking-display);
+}
+
+.import__limits dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.import__limit dt {
+  font-weight: 600;
+  font-size: var(--fs-s);
+}
+
+.import__limit dd {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--fs-s);
+}

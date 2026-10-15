@@ -56,6 +56,11 @@ export function formatCount(n: number): string {
   return `${(n / 1000000).toFixed(1).replace(/\.0$/, '')}M`
 }
 
+/** Full-precision counts (1,234 / 12,345). For places where rounding would mislead, such as destructive confirmations. */
+export function formatExact(n: number): string {
+  return n.toLocaleString('en')
+}
+
 /** Human-readable byte sizes for media limits. */
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`

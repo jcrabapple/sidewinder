@@ -1,0 +1,4 @@
+Account address,Show boosts,Notify on new posts,Languages
+u01@localhost:18080,false,true,
+u02@localhost:18080,true,false,
+u03@localhost:18080,true,false,

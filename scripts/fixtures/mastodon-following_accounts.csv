@@ -1,0 +1,9 @@
+Account address,Show boosts,Notify on new posts,Languages
+alice@example.social,true,false,
+bob@example.org,false,true,"en, de"
+carol@example.net,true,,
+dave@mastodon.example,true,true,
+erin@social.example,false,false,
+frank@old.example.social,true,false,"en"
+grace@example.social,,,
+henry@fedi.example,false,,

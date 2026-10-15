@@ -182,10 +182,13 @@ function newerId(a: string, b: string): string {
   return a > b ? a : b
 }
 
-/** First federated query on a server that knows many domains can take ~2min
- *  server-side (GTS warms its cache); later loads are instant. */
+/** Cold loads are slow server-side: a federated timeline's first query can
+ *  take ~2min (GTS warms its cache), and a busy hashtag's first load has
+ *  taken ~2min too. The client must wait that long: aborting earlier closes
+ *  the request, the server cancels the work, and the cache never warms, so
+ *  every retry starts from zero. */
 function timeoutFor(props: TimelinePageProps): number {
-  return props.kind === 'federated' ? 240000 : 90000
+  return props.kind === 'federated' || props.kind === 'tag' ? 240000 : 90000
 }
 
 export function TimelinePage(props: TimelinePageProps) {
@@ -632,7 +635,9 @@ export function TimelinePage(props: TimelinePageProps) {
           <p>
             {props.kind === 'federated'
               ? 'Asking your server to sort its whole known fediverse. The first load can take a minute or two; later loads are quick.'
-              : 'Loading posts…'}
+              : props.kind === 'tag'
+                ? 'Gathering posts for this hashtag from your server. The first load of a busy tag can take a couple of minutes; later loads are quick.'
+                : 'Loading posts…'}
           </p>
         </div>
       )}

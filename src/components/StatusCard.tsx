@@ -275,18 +275,20 @@ function LinkCard({ card }: { card: PreviewCard }) {
   )
 }
 
-/** Route in-app: mentions → profile, hashtags → tag timeline. */
+/** Route in-app: hashtags → tag timeline, mentions → profile. Hashtags are
+ *  checked first: servers may tag a hashtag link with both classes, and a
+ *  hashtag must never fall through to the mention lookup. */
 function handleContentClick(e: MouseEvent) {
   const a = (e.target as HTMLElement).closest('a')
   if (!a) return
   const href = a.getAttribute('href') ?? ''
-  if (a.classList.contains('mention')) {
-    e.preventDefault()
-    resolveMention(href)
-  } else if (a.classList.contains('hashtag')) {
+  if (a.classList.contains('hashtag')) {
     e.preventDefault()
     const tag = decodeURIComponent(href.replace(/.*\/tags?\//, '')).replace(/[/?].*$/, '')
     if (tag) navigate(`/tags/${encodeURIComponent(tag)}`)
+  } else if (a.classList.contains('mention')) {
+    e.preventDefault()
+    resolveMention(href)
   }
 }
 

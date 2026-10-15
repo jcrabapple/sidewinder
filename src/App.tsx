@@ -11,7 +11,8 @@ import { openCompose } from './state/compose'
 import { toast } from './state/toast'
 import { installKeyboardSheetFix } from './util/keyboard'
 import { installHeaderTapToTop } from './util/scroll'
-import { refreshFollowRequestCount } from './state/notifications'
+import { refreshFollowRequestCount, refreshUnreadNotificationCount } from './state/notifications'
+import { onNotification } from './state/streaming'
 import { syncMarkersFromServer } from './state/markers'
 import { ShortcutsHost } from './components/Shortcuts'
 import './shell.css'
@@ -69,6 +70,15 @@ export function App() {
       for (const ev of events) window.removeEventListener(ev, beat, opts)
     }
   }, [])
+
+  // Sidebar notification badge: recount on load, account switch, and every
+  // live notification (the user stream is open whichever page is showing).
+  useEffect(() => {
+    if (!activeId.value) return
+    void refreshUnreadNotificationCount()
+    return onNotification(() => void refreshUnreadNotificationCount())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId.value])
 
   // Global must-haves: 'n' opens compose, '/' jumps to search.
   useEffect(() => {

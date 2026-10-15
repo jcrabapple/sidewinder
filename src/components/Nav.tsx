@@ -7,7 +7,7 @@ import { useRef, useState } from 'preact/hooks'
 import { route, navigate } from '../router'
 import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
-import { followRequestCount } from '../state/notifications'
+import { followRequestCount, unreadNotificationCount, COUNT_WINDOW } from '../state/notifications'
 import { openCompose } from '../state/compose'
 import { scrollToTop } from '../util/scroll'
 import './Nav.css'
@@ -61,6 +61,8 @@ function reTapToTop(e: MouseEvent, active: boolean) {
 function NavButton({ item }: { item: NavItem }) {
   const active = isActive(item.href, route.value.segments)
   const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
+  const unread = item.href === '/notifications' ? unreadNotificationCount.value : 0
+  const countLabel = unread >= COUNT_WINDOW ? `${COUNT_WINDOW}+` : String(unread)
   return (
     <a
       href={'#' + item.href}
@@ -74,6 +76,12 @@ function NavButton({ item }: { item: NavItem }) {
       </span>
       <span>{item.label}</span>
       {showDot && <span class="visually-hidden">{`, ${followRequestCount.value} pending follow requests`}</span>}
+      {unread > 0 && (
+        <>
+          <span class="nav-count" aria-hidden="true">{countLabel}</span>
+          <span class="visually-hidden">{`, ${countLabel} unread`}</span>
+        </>
+      )}
     </a>
   )
 }
@@ -87,6 +95,10 @@ export function NavRail() {
         <img src="/favicon.png" alt="" width="34" height="34" />
         <span class="nav-brand__name">Sidewinder</span>
       </a>
+      <button class="btn btn--primary nav-compose" onClick={() => openCompose()}>
+        <Icon name="pencil" size={18} />
+        Post
+      </button>
       <div class="nav-rail__items">
         {ITEMS.filter((item) => !item.admin || isAdminRole(sess)).map((item) => (
           <NavButton key={item.href} item={item} />
@@ -106,10 +118,6 @@ export function NavRail() {
         </button>
       </div>
       <div class="nav-rail__footer">
-        <button class="btn btn--primary nav-compose" onClick={() => openCompose()}>
-          <Icon name="pencil" size={18} />
-          Post
-        </button>
         <a href={'#/accounts/' + sess.account.id} class="nav-account" aria-current={isActive('/accounts/' + sess.account.id, route.value.segments) ? 'page' : undefined}>
           <img class="nav-account__avatar" src={sess.account.avatar} alt="" width="34" height="34" />
           <span class="nav-account__meta">

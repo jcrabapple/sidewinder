@@ -41,6 +41,29 @@
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  /* The list gives way on short windows; brand, Post and the account block
+     stay put. min-height: 0 lets the flex child shrink below its content. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 calc(var(--sp-2) * -1);
+  padding: 0 var(--sp-2);
+}
+
+/* Unread count on the Notifications entry. */
+.nav-count {
+  margin-left: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  line-height: 22px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .nav-link {
@@ -102,6 +125,7 @@ button.nav-logout {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  flex: none;
 }
 
 .nav-compose { width: 100%; }

@@ -10,8 +10,8 @@ import { toast } from '../state/toast'
 import { api, activeSession } from '../state/auth'
 import { hasAdminScope, approveSignup, denySignup } from '../state/admin'
 import { onNotification } from '../state/streaming'
-import { refreshFollowRequestCount } from '../state/notifications'
-import { queueMarkerPush, syncMarkersFromServer } from '../state/markers'
+import { refreshFollowRequestCount, markNotificationsRead } from '../state/notifications'
+import { syncMarkersFromServer } from '../state/markers'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate, route } from '../router'
@@ -205,7 +205,7 @@ export function NotificationsView() {
       // newest item of a filtered view is not "the newest read
       // notification", and pushing it would misplace the server marker for
       // every other client.
-      if (f === 'all' && page.items.length > 0) queueMarkerPush('notifications', page.items[0].id)
+      if (f === 'all' && page.items.length > 0) markNotificationsRead(page.items[0].id)
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Notifications could not be loaded.')
@@ -255,6 +255,11 @@ export function NotificationsView() {
   }, [filter])
 
   function showPending() {
+    // Showing the pill's notifications reads them, so the sidebar badge clears
+    // with them. Same unfiltered-only rule as loadFirst for moving the mark.
+    if (filter === 'all' && pending.length > 0) {
+      markNotificationsRead(pending.reduce((max, n) => (n.id > max ? n.id : max), pending[0].id))
+    }
     setItems((cur) => {
       const seen = new Set(cur.map((n) => n.id))
       return [...pending.filter((n) => !seen.has(n.id)), ...cur]

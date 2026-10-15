@@ -91,6 +91,19 @@ export function NavRail() {
         {ITEMS.filter((item) => !item.admin || isAdminRole(sess)).map((item) => (
           <NavButton key={item.href} item={item} />
         ))}
+        <button
+          type="button"
+          class="nav-link nav-logout"
+          onClick={() => {
+            logout()
+            navigate('/')
+          }}
+        >
+          <span class="nav-link__icon">
+            <Icon name="logout" size={22} />
+          </span>
+          <span>Logout</span>
+        </button>
       </div>
       <div class="nav-rail__footer">
         <button class="btn btn--primary nav-compose" onClick={() => openCompose()}>
@@ -121,17 +134,6 @@ export function NavRail() {
             </select>
           </div>
         )}
-        <button
-          class="icon-btn nav-logout"
-          aria-label="Sign out"
-          title="Sign out"
-          onClick={() => {
-            logout()
-            navigate('/')
-          }}
-        >
-          <Icon name="logout" size={20} />
-        </button>
       </div>
     </nav>
   )

@@ -57,6 +57,20 @@
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
+/* Logout is a <button> styled as a nav entry: reset the native button chrome
+   so it matches the <a> entries above it. */
+button.nav-logout {
+  width: 100%;
+  margin: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .nav-link:hover {
   background: var(--surface-2);
   color: var(--fg);

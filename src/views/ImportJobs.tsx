@@ -4,21 +4,26 @@
  */
 import { useEffect, useState } from 'preact/hooks'
 import { IMPORT_TYPE_INFO } from '../util/importCsv'
-import { dismissJob, jobs, stopJob, type ImportJob } from '../state/importer'
+import { dismissJob, jobs, rewatchJob, stopJob, type ImportJob } from '../state/importer'
+import { canRewatch } from '../util/importWatch'
 import { formatExact, formatRelative } from '../util/time'
 import './ImportJobs.css'
 
 const TICK_MS = 5_000
+/** From this many accounts on, say plainly that it will be slow (a 300-account run took over 20 minutes). */
+const BIG_JOB_ROWS = 200
 
 /** Stable per phase: this text sits in a live region, so it must not change on every tick. */
 function phaseSentence(job: ImportJob): string {
-  if (job.phase === 'watching') return 'Watching your counts. They update every few seconds.'
+  if (job.phase === 'watching') return 'Watching your counts. They refresh on their own.'
   if (job.phase === 'quiet') return 'No change for a while. The server may be done, or still working through slow lookups.'
   switch (job.endedReason) {
     case 'stopped':
       return 'Stopped watching.'
+    case 'idle':
+      return 'Stopped watching: the count has not moved for an hour, so this has most likely finished.'
     case 'timeout':
-      return 'Stopped watching after 15 minutes.'
+      return 'Stopped watching after 24 hours.'
     case 'error':
       return 'Stopped watching because the server could not be reached.'
     case 'session':
@@ -72,6 +77,13 @@ function JobCard({ job, now }: { job: ImportJob; now: number }) {
         {phaseSentence(job)}
       </p>
       {job.phase === 'quiet' && <p class="help-text import-job__since">Count unchanged for {quietFor(job, now)}.</p>}
+      {!ended && job.rows >= BIG_JOB_ROWS && (
+        <p class="help-text import-job__slow">
+          Big files are slow. GoToSocial looks accounts up one at a time and can sit for minutes on a server that is
+          down, so a few thousand accounts take hours. You can leave this page; come back and it picks the count up
+          again.
+        </p>
+      )}
       <p class="help-text import-job__caveat">
         The server skips accounts it cannot reach, accounts on blocked domains, and locked accounts that have
         not approved you yet, so the final count can be lower than the file.
@@ -81,6 +93,11 @@ function JobCard({ job, now }: { job: ImportJob; now: number }) {
         {!ended && (
           <button type="button" class="btn import-job__stop" onClick={() => stopJob(job.id)}>
             Stop watching
+          </button>
+        )}
+        {ended && canRewatch(job.endedReason, now - job.startedAt) && (
+          <button type="button" class="btn import-job__rewatch" onClick={() => rewatchJob(job.id)}>
+            Watch again
           </button>
         )}
         <button type="button" class="btn btn--ghost import-job__dismiss" onClick={() => dismissJob(job.id)}>

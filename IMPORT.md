@@ -100,12 +100,15 @@ Every claim above was exercised against a disposable instance (`references/throw
 | `type=lists` / `bookmarks` | `400 ... type lists not recognized, valid types are: [following blocks mutes]` |
 | `mode=bogus` | `400 ... mode bogus not recognized, valid modes are: [merge overwrite]` |
 | missing `type` / `data` | `400 ... Field validation for 'Type' failed on the 'required' tag` (and Data) |
-| 3 local + 2 unreachable remote accounts | +3; the remote rows are skipped, ~1 s each of lookup time |
+| 3 local + 2 unreachable remote accounts (disposable instance, federation off) | +3; the remote rows are skipped at once, which is why this instance says nothing about real dead servers (see the production rows below) |
 | Locked account | follow request created (`requested: true`), `following_count` unchanged |
-| 100 local rows | counts settled in about 6-7 s |
+| 100 local rows (disposable instance, federation off) | counts settled in about 6-7 s |
 | `Accept: text/html` | 406 with an HTML error page. JSON or no Accept header is fine. |
 | Another account's token / a bad token | isolation holds / `401 {"error":"Unauthorized: token not supplied"}` |
 | Exports | `following.csv`, `blocks.csv`, `mutes.csv` written by GoToSocial are byte-identical to what `serializeUpload` produces for the same rows |
+| 300 blocks sent to the PRODUCTION instance (real federation, 2026-10-15) | `202` in 10 ms. 155 accounts created in 19 min 46 s: 20-30 a minute while servers answer, three stalls of about 250 s each. 23 rows failed (no such host, expired certificates, 5xx, webfinger 404, deleted). The importer works one row at a time, and a server that answers 5xx or times out costs six attempts with backoff (about 250 s) before the next row starts. |
+| Skipped rows, in the server log | One ERROR line per failed lookup, on stderr: `func=account.(*Processor).importBlocksAsyncF.func1 level=ERROR msg="could not retrieve account: ... error webfingering @user@host: ..."` (`importFollowsAsyncF` / `importMutesAsyncF` for the others). Read them with `podman logs --since 4h gotosocial 2>&1 \| grep AsyncF`. Successful rows leave no line. |
+| Time for N rows | about N / 25 minutes while servers answer, plus about 4 minutes per dead server that answers 5xx or times out. A follow list of live accounts is faster than a block list, which is mostly dead hosts. |
 
 ## 2. What Mastodon exports (verified against mastodon/mastodon main)
 
@@ -321,18 +324,23 @@ Quote a field only if it contains `,` `"` `\r` or `\n` (validated addresses neve
   4. `serializeUpload`, build `FormData`: `data` = `new Blob([csv], {type:'text/csv'})` with filename `${type}.csv`, `type`, `mode`.
   5. `POST /api/v1/import` (60 s timeout). On success create the job (`phase: 'watching'`), persist, start polling, return it.
   6. Map failures with `ImportError` (see `importErrorMessage`).
-- Polling: every `POLL_FAST_MS` (3 s) for the first `FAST_WINDOW_MS` (2 min), then every `POLL_SLOW_MS` (10 s). Each tick reads stats and
-  updates `current`; when it changed set `lastChangeAt = now` and `phase = 'watching'`; when unchanged for `QUIET_AFTER_MS` (30 s) set
-  `phase = 'quiet'` (keep polling). After `WATCH_LIMIT_MS` (15 min) from `startedAt`, or 5 consecutive failed polls, or the session is gone:
-  `phase = 'ended'` with `endedReason` `timeout` / `error` / `session`. `stopJob` -> ended/`stopped`. Keep at most one live poll chain per
+- Polling (`src/util/importWatch.ts`, pure and unit-tested): every `POLL_FAST_MS` (3 s) for the first `FAST_WINDOW_MS` (2 min), every `POLL_SLOW_MS`
+  (10 s) until `SLOW_WINDOW_MS` (15 min), then every `POLL_LONG_MS` (30 s). Each tick reads stats and updates `current`; when it changed set
+  `lastChangeAt = now` and `phase = 'watching'`; when unchanged for `quietAfter(age)` (30 s, or three polls' worth once polls are 30 s apart) set
+  `phase = 'quiet'` (keep polling). A job ends when the count has not moved for `IDLE_LIMIT_MS` (60 min, `endedReason` `idle`, "most likely finished"),
+  at `WATCH_CAP_MS` (24 h, `timeout`), after 5 consecutive failed polls (`error`), or when the session is gone (`session`). `stopJob` -> ended/`stopped`.
+  The limit follows progress, not a wall clock, because imports are slow: the first version stopped every job 15 minutes after the upload, and a real
+  300-account import was still creating accounts at minute 19. Keep at most one live poll chain per
   job: every (re)schedule and stop bumps a per-job generation, so a poll that was awaiting the network when it was superseded ends itself
   instead of arming a second timer.
 - Counts are account-wide, so the newest job of a type supersedes older live jobs of that type (`ended` / `superseded`, frozen at the last
   count they saw). Otherwise the older job would claim changes made by the newer one.
 - Persistence: `localStorage['sidewinder.importJobs']` = `Record<sessionId, ImportJob[]>`; at most 5 jobs per session, newest first;
-  drop ended jobs older than 24 h on load. `resumeJobs()` restarts polling for stored jobs of the active session that are not ended and
-  younger than `WATCH_LIMIT_MS` (and marks the rest ended/`timeout`). `jobs` is a signal of the ACTIVE session's jobs (recomputed when the active session changes).
-  Parse stored JSON defensively (bad JSON -> empty).
+  drop ended jobs older than 24 h on load. `resumeJobs()` (called when the Import page mounts) acts on each stored job of the active session via
+  `resumeAction`: a running job is polled again at once, so time spent away counts as idle only if the count really did not move; a running job past the
+  24 h cap expires (`timeout`); a stored `timeout` younger than the cap can only be a cut-off by the first version's 15-minute rule and is revived;
+  every other ended job is left alone. `rewatchJob(id)` ("Watch again") puts an ended job back to `watching` with a fresh `lastChangeAt`.
+  `jobs` is a signal of the ACTIVE session's jobs (recomputed when the active session changes). Parse stored JSON defensively (bad JSON -> empty).
 - `clearJobsFor(sessionId)`: remove that session's jobs and stop its timers (the orchestrator wires this into logout).
 - `dismissJob(id)`: stop its timer and delete the record.
 - `downloadBackup(type)`: `GET /api/v1/exports/${type}.csv` with the active session's bearer token via `Api.fetchWithTimeout`; on `!ok`
@@ -404,9 +412,11 @@ Reads `jobs` from `state/importer`; `null` when empty. `section.import-jobs.card
 
 - Title: `{IMPORT_TYPE_INFO[type].title} · {Merge|Overwrite}`; second line: file name, `{rows} accounts sent`, started `formatRelative(new Date(startedAt).toISOString())`.
 - Counts line (`.import-job__counts`, `aria-live="off"`): `{Following}: {baseline} → {current}` and the signed delta `(+35)` / `(−12)` / `(no change)`; `.num` tabular.
-- Phase sentence in a visually-polite `role="status"` element: watching -> "Watching your counts. They update every few seconds."; quiet -> "No change for {m}. The server may be done, or still working through slow lookups."; ended/stopped -> "Stopped watching."; ended/timeout -> "Stopped watching after 15 minutes."; ended/error -> "Stopped watching because the server could not be reached."; ended/session -> "Stopped watching because this account was signed out."; ended/superseded -> "Stopped watching because a newer import of the same kind started. This is the last count it saw."
+- Phase sentence in a visually-polite `role="status"` element: watching -> "Watching your counts. They refresh on their own."; quiet -> "No change for a while. The server may be done, or still working through slow lookups." (plus a separate, non-live line "Count unchanged for {m}."); ended/stopped -> "Stopped watching."; ended/idle -> "Stopped watching: the count has not moved for an hour, so this has most likely finished."; ended/timeout -> "Stopped watching after 24 hours."; ended/error -> "Stopped watching because the server could not be reached."; ended/session -> "Stopped watching because this account was signed out."; ended/superseded -> "Stopped watching because a newer import of the same kind started. This is the last count it saw."
 - Caveat `.help-text`: "The server skips accounts it cannot reach, accounts on blocked domains, and locked accounts that have not approved you yet, so the final count can be lower than the file." For blocks add "Blocking an account also removes any follow between you and them."
-- Buttons: `Stop watching` (not ended) -> `stopJob`; `Dismiss` -> `dismissJob`.
+- Buttons: `Stop watching` (not ended) -> `stopJob`; `Watch again` (ended, reason allowed by `canRewatch`: stopped, idle, error, or a legacy timeout, younger than 24 h) -> `rewatchJob`; `Dismiss` -> `dismissJob`.
+- Big-file note `.help-text.import-job__slow` while the job runs and `rows >= 200`: "Big files are slow. GoToSocial looks accounts up one at a time and can sit for minutes on a server that is down, so a few thousand accounts take hours. You can leave this page; come back and it picks the count up again."
+- Ended jobs: dashed border on `--surface`. Never `opacity`: `0.75` failed axe color-contrast (3.61:1) on every muted line of the card.
 - A running `Date.now()` for the quiet-minutes text re-renders on a 5 s interval while any job is not ended.
 
 ### Shared UI rules (from AGENTS.md, restated)
@@ -415,7 +425,12 @@ Design tokens only (no hex/rgb/oklch literals), class prefix per component (`.im
 
 ## 7. Working on this feature
 
-- Unit tests: `pnpm test:import` (node:test, no dependencies; runs `importCsv.ts` directly with type stripping).
+- Unit tests: `pnpm test:import` (node:test, no dependencies; runs `importCsv.ts` and `importWatch.ts` directly with type stripping).
+  `scripts/test-import-watch.mjs` replays the real 2026-10-15 run against the watcher.
+- Watcher timing end to end (`scripts/stub-gts.py <dist-dir> <port>` is the stub): build into scratch, serve it from a stub that also answers `GET /api/v1/exports/stats`, `GET /api/v1/accounts/verify_credentials`
+  and `POST /api/v1/import`, and run the page on a 60x clock (wrap `Date.now`, `setTimeout`, `setInterval` with `Page.addScriptToEvaluateOnNewDocument`,
+  persisting the clock base in localStorage so reloads keep one continuous clock). 100 simulated minutes take under two. The harness browser can
+  reset between calls: do setup and run in one call, and only register the clock script if the clock is not already fast.
 - Typecheck: `pnpm exec tsc --noEmit`. Production build: `pnpm build` (dist/ is the live site; for experiments build into scratch
   with `vite build --outDir <scratch> --emptyOutDir` from a script file, the terminal guard blocks that phrase on a command line).
 - Behaviour against a real importer: stand up the disposable instance from the `gotosocial-admin` skill

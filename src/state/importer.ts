@@ -9,6 +9,7 @@ import { Api, ApiError, NetworkError } from '../api/client'
 import { activeSession, sessions } from './auth'
 import type { ImportRow, ImportType } from '../util/importCsv'
 import { serializeUpload } from '../util/importCsv'
+import { canRewatch, pollDelay, quietAfter, resumeAction, watchEnd } from '../util/importWatch'
 
 export type ImportMode = 'merge' | 'overwrite'
 
@@ -24,16 +25,14 @@ export interface ExportStats {
 }
 
 export const JOBS_STORE_KEY = 'sidewinder.importJobs'
-export const POLL_FAST_MS = 3_000
-export const POLL_SLOW_MS = 10_000
-export const FAST_WINDOW_MS = 120_000
-export const QUIET_AFTER_MS = 30_000
-export const WATCH_LIMIT_MS = 15 * 60_000
 export const MAX_JOBS_PER_SESSION = 5
+/** First poll after a job is resumed or watched again; the schedule in util/importWatch.ts takes over after it. */
+const RESUME_FIRST_POLL_MS = 1_000
 
-/** watching: counts moved recently. quiet: no change for QUIET_AFTER_MS, still polling. ended: polling stopped. */
+/** watching: counts moved recently. quiet: no change for a few polls (quietAfter), still polling. ended: polling stopped. */
 export type JobPhase = 'watching' | 'quiet' | 'ended'
-export type EndedReason = 'stopped' | 'timeout' | 'error' | 'session' | 'superseded'
+/** idle: no change for an hour (most likely finished). timeout: the 24 h cap, or a legacy 15-minute cut-off. */
+export type EndedReason = 'stopped' | 'timeout' | 'idle' | 'error' | 'session' | 'superseded'
 
 export interface ImportJob {
   id: string
@@ -214,6 +213,7 @@ function parseStored(raw: string | null): Record<string, ImportJob[]> {
       const endedReason =
         j.endedReason === 'stopped' ||
         j.endedReason === 'timeout' ||
+        j.endedReason === 'idle' ||
         j.endedReason === 'error' ||
         j.endedReason === 'session' ||
         j.endedReason === 'superseded'
@@ -343,15 +343,11 @@ function jobId(): string {
   return `job-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-function nextDelay(startedAt: number, now: number): number {
-  return now - startedAt < FAST_WINDOW_MS ? POLL_FAST_MS : POLL_SLOW_MS
-}
-
 /**
  * Schedule the next poll. The closure holds only the immutable job identity;
  * counts and phase are read from the store each tick, so no stale values.
  */
-function schedulePoll(job: ImportJob, state: { failures: number }): void {
+function schedulePoll(job: ImportJob, state: { failures: number }, firstDelayMs?: number): void {
   clearTimer(job.id)
   const gen = generations.get(job.id) ?? 0
   const isCurrent = (): boolean => generations.get(job.id) === gen
@@ -369,19 +365,13 @@ function schedulePoll(job: ImportJob, state: { failures: number }): void {
       if (!isCurrent()) return
       state.failures = 0
       const now = Date.now()
-      if (now - job.startedAt >= WATCH_LIMIT_MS) {
-        updateJob(job.id, (j) => ({ ...j, current: countFor(stats, j.type), phase: 'ended', endedReason: 'timeout' }))
-        return
-      }
       const count = countFor(stats, job.type)
-      updateJob(job.id, (j) => {
-        if (j.phase === 'ended') return j // stopped or ended between ticks
-        const changed = count !== j.current
-        const lastChangeAt = changed ? now : j.lastChangeAt
-        const phase: JobPhase =
-          changed || now - lastChangeAt < QUIET_AFTER_MS ? 'watching' : 'quiet'
-        return { ...j, current: count, lastChangeAt, phase }
-      })
+      const cur = findJob(job.id)
+      if (!cur || cur.phase === 'ended') return // stopped or ended between ticks
+      const lastChangeAt = count !== cur.current ? now : cur.lastChangeAt
+      const end = watchEnd(now - cur.startedAt, now - lastChangeAt)
+      const phase: JobPhase = end ? 'ended' : now - lastChangeAt < quietAfter(now - cur.startedAt) ? 'watching' : 'quiet'
+      updateJob(job.id, (j) => ({ ...j, current: count, lastChangeAt, phase, endedReason: end ?? undefined }))
     } catch {
       if (!isCurrent()) return
       state.failures += 1
@@ -397,12 +387,12 @@ function schedulePoll(job: ImportJob, state: { failures: number }): void {
     if (!live || live.phase === 'ended' || !isCurrent()) return
     const t = setTimeout(() => {
       void tick()
-    }, nextDelay(job.startedAt, Date.now()))
+    }, pollDelay(Date.now() - job.startedAt))
     timers.set(job.id, t)
   }
   const t = setTimeout(() => {
     void tick()
-  }, nextDelay(job.startedAt, Date.now()))
+  }, firstDelayMs ?? pollDelay(Date.now() - job.startedAt))
   timers.set(job.id, t)
 }
 
@@ -480,7 +470,7 @@ export async function startImport(args: StartImportArgs): Promise<ImportJob> {
 // Lifecycle: resume, stop, dismiss, clear
 // ---------------------------------------------------------------------------
 
-/** Restart polling for stored, unfinished jobs of the active session. Safe to call repeatedly. */
+/** Restart polling for stored, unfinished jobs of the active session (and revive legacy cut-offs). Safe to call repeatedly. */
 export function resumeJobs(): void {
   const sessionId = activeSession.value?.id
   if (!sessionId) return
@@ -490,19 +480,20 @@ export function resumeJobs(): void {
   let changed = false
   const next: ImportJob[] = []
   for (const job of list) {
-    if (job.phase === 'ended') {
+    const action = resumeAction(job, now)
+    if (action === 'leave') {
       next.push(job)
-      continue
-    }
-    if (now - job.startedAt >= WATCH_LIMIT_MS) {
+    } else if (action === 'expire') {
       changed = true
       next.push({ ...job, phase: 'ended', endedReason: 'timeout' })
-      continue
+    } else {
+      // 'revive' takes back a job the first version's 15-minute limit cut off. Either way poll again at once
+      // (exactly one chain: schedulePoll clears the timer first); that poll applies the idle rule.
+      const live: ImportJob = action === 'revive' ? { ...job, phase: 'watching', endedReason: undefined } : job
+      changed = true
+      next.push(live)
+      schedulePoll(live, { failures: 0 }, RESUME_FIRST_POLL_MS)
     }
-    // Not ended and young: ensure it is polling (exactly once: clearTimer first).
-    changed = true
-    next.push(job)
-    schedulePoll(job, { failures: 0 })
   }
   if (changed) {
     jobStore.value = { ...jobStore.value, [sessionId]: trimList(next) }
@@ -516,6 +507,16 @@ export function stopJob(id: string): void {
   updateJob(id, (j) =>
     j.phase === 'ended' ? j : { ...j, phase: 'ended', endedReason: 'stopped' },
   )
+}
+
+/** Take an ended job back up ("Watch again"). Jobs a newer import or a sign-out ended stay ended. */
+export function rewatchJob(id: string): void {
+  const job = findJob(id)
+  if (!job || job.phase !== 'ended' || !canRewatch(job.endedReason, Date.now() - job.startedAt)) return
+  if (!apiForSession(job.sessionId)) return
+  const live: ImportJob = { ...job, phase: 'watching', endedReason: undefined, lastChangeAt: Date.now() }
+  updateJob(id, () => live)
+  schedulePoll(live, { failures: 0 }, RESUME_FIRST_POLL_MS)
 }
 
 /** Stop polling and delete the record. */

@@ -79,7 +79,9 @@
   min-height: 44px;
 }
 
-/* Ended jobs read as finished, not live. */
+/* Ended jobs read as finished, not live: a dashed edge on the flatter surface. Never opacity: it blends every
+   line of text into the background and fails contrast (3.6:1 on the muted lines). */
 .import-job[data-phase='ended'] {
-  opacity: 0.75;
+  border-style: dashed;
+  background: var(--surface);
 }

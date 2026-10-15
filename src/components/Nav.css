@@ -110,17 +110,6 @@ button.nav-logout {
   display: inline-flex;
 }
 
-.nav-dot {
-  position: absolute;
-  top: 2px;
-  right: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent-strong);
-  border: 2px solid var(--bg);
-}
-
 .nav-rail__footer {
   display: flex;
   flex-direction: column;

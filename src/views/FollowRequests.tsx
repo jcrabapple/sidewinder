@@ -22,7 +22,19 @@ const PAGE_SIZE = 30
 
 export function FollowRequestsView() {
   useTitle('Follow requests')
+  return (
+    <div class="follow-requests">
+      <header class="view-header">
+        <h1>Follow requests</h1>
+      </header>
+      <FollowRequestsList />
+    </div>
+  )
+}
 
+/** The pending-request list without a page header. Standalone page and the
+ *  Follow requests tab on Notifications both render this. */
+export function FollowRequestsList() {
   const [items, setItems] = useState<Account[]>([])
   const [state, setState] = useState<LoadState>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -91,20 +103,17 @@ export function FollowRequestsView() {
   }
 
   return (
-    <div class="follow-requests">
-      <header class="view-header">
-        <h1>Follow requests</h1>
-        <div class="view-header__actions">
-          <button
-            class="icon-btn"
-            aria-label="Refresh follow requests"
-            title="Refresh follow requests"
-            onClick={() => void loadFirst()}
-          >
-            <Icon name="refresh" size={18} />
-          </button>
-        </div>
-      </header>
+    <div class="follow-requests__panel">
+      <div class="follow-requests__toolbar">
+        <button
+          class="icon-btn"
+          aria-label="Refresh follow requests"
+          title="Refresh follow requests"
+          onClick={() => void loadFirst()}
+        >
+          <Icon name="refresh" size={18} />
+        </button>
+      </div>
 
       {state === 'loading' && (
         <div class="state-block" role="status" aria-busy="true">

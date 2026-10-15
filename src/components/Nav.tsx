@@ -7,7 +7,7 @@ import { useRef, useState } from 'preact/hooks'
 import { route, navigate } from '../router'
 import { Icon } from './Icon'
 import { activeSession, sessions, switchAccount, logout } from '../state/auth'
-import { followRequestCount, unreadNotificationCount, COUNT_WINDOW } from '../state/notifications'
+import { unreadNotificationCount, COUNT_WINDOW } from '../state/notifications'
 import { openCompose } from '../state/compose'
 import { scrollToTop } from '../util/scroll'
 import './Nav.css'
@@ -16,8 +16,6 @@ interface NavItem {
   href: string
   label: string
   icon: string
-  /** When true, shows a dot if unseen notifications exist. */
-  attention?: boolean
   /** Only rendered for admin/moderator accounts. */
   admin?: boolean
 }
@@ -32,8 +30,6 @@ const ITEMS: NavItem[] = [
   { href: '/lists', label: 'Lists', icon: 'list' },
   { href: '/favourites', label: 'Favourites', icon: 'star' },
   { href: '/bookmarks', label: 'Bookmarks', icon: 'bookmark' },
-  { href: '/wrapped', label: 'Wrapped', icon: 'sparkle' },
-  { href: '/follow_requests', label: 'Follow requests', icon: 'user-plus', attention: true },
   { href: '/moderation', label: 'Moderation', icon: 'shield', admin: true },
   { href: '/settings', label: 'Settings', icon: 'sliders' },
 ]
@@ -60,7 +56,6 @@ function reTapToTop(e: MouseEvent, active: boolean) {
 
 function NavButton({ item }: { item: NavItem }) {
   const active = isActive(item.href, route.value.segments)
-  const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
   const unread = item.href === '/notifications' ? unreadNotificationCount.value : 0
   const countLabel = unread >= COUNT_WINDOW ? `${COUNT_WINDOW}+` : String(unread)
   return (
@@ -72,10 +67,8 @@ function NavButton({ item }: { item: NavItem }) {
     >
       <span class="nav-link__icon">
         <Icon name={item.icon} size={22} />
-        {showDot && <span class="nav-dot" aria-hidden="true" />}
       </span>
       <span>{item.label}</span>
-      {showDot && <span class="visually-hidden">{`, ${followRequestCount.value} pending follow requests`}</span>}
       {unread > 0 && (
         <>
           <span class="nav-count" aria-hidden="true">{countLabel}</span>
@@ -155,7 +148,7 @@ const MOBILE: NavItem[] = MOBILE_HREFS
   .map((href) => ITEMS.find((i) => i.href === href))
   .filter((i): i is NavItem => Boolean(i))
 
-const MORE_HREFS = ['/local', '/federated', '/lists', '/favourites', '/bookmarks', '/wrapped', '/follow_requests', '/moderation', '/settings']
+const MORE_HREFS = ['/local', '/federated', '/lists', '/favourites', '/bookmarks', '/moderation', '/settings']
 const MORE_ITEMS: NavItem[] = MORE_HREFS
   .map((href) => ITEMS.find((i) => i.href === href))
   .filter((i): i is NavItem => Boolean(i))
@@ -206,8 +199,8 @@ function MoreTab({ active }: { active: boolean }) {
   const ref = useRef<HTMLDialogElement>(null)
   const [isOpen, setIsOpen] = useState(false)
   const segments = route.value.segments
-  const frItem = ITEMS.find((i) => i.href === '/follow_requests')
-  const frDot = (frItem?.attention === true && followRequestCount.value > 0) ?? false
+  const profileHref = '/accounts/' + (activeSession.value?.account.id ?? '')
+  const profileActive = isActive(profileHref, segments)
 
   function close() {
     setIsOpen(false)
@@ -228,7 +221,6 @@ function MoreTab({ active }: { active: boolean }) {
       >
         <span class="nav-link__icon">
           <Icon name="more" size={24} />
-          {frDot && <span class="nav-dot" aria-hidden="true" />}
         </span>
         <span>More</span>
       </button>
@@ -242,7 +234,6 @@ function MoreTab({ active }: { active: boolean }) {
         <div class="sw-dialog__body more-sheet__items">
           {(isAdminRole(activeSession.value) ? MORE_ITEMS : MORE_ITEMS.filter((item) => !item.admin)).map((item) => {
             const itemActive = isActive(item.href, segments)
-            const showDot = item.attention === true && item.href === '/follow_requests' && followRequestCount.value > 0
             return (
               <a
                 key={item.href}
@@ -253,18 +244,29 @@ function MoreTab({ active }: { active: boolean }) {
               >
                 <span class="nav-link__icon">
                   <Icon name={item.icon} size={20} />
-                  {showDot && <span class="nav-dot" aria-hidden="true" />}
                 </span>
                 <span>{item.label}</span>
-                {showDot && (
-                  <span class="visually-hidden">{`${followRequestCount.value} pending follow requests`}</span>
-                )}
                 <Icon name="chevron-right" size={16} />
               </a>
             )
           })}
+          {/* Profile hosts Wrapped and the account's own posts; on phones
+              it is the way in, so it lives here rather than a tab. */}
+          <a
+            href={'#' + profileHref}
+            class="more-sheet__row"
+            aria-current={profileActive ? 'page' : undefined}
+            onClick={close}
+          >
+            <span class="nav-link__icon">
+              <Icon name="user" size={20} />
+            </span>
+            <span>Profile</span>
+            <Icon name="chevron-right" size={16} />
+          </a>
         </div>
       </dialog>
     </>
   )
 }
+

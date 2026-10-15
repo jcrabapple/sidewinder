@@ -10,7 +10,8 @@ import { toast } from '../state/toast'
 import { api, activeSession } from '../state/auth'
 import { hasAdminScope, approveSignup, denySignup } from '../state/admin'
 import { onNotification } from '../state/streaming'
-import { refreshFollowRequestCount, markNotificationsRead } from '../state/notifications'
+import { refreshFollowRequestCount, markNotificationsRead, followRequestCount } from '../state/notifications'
+import { FollowRequestsList } from './FollowRequests'
 import { syncMarkersFromServer } from '../state/markers'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
@@ -18,7 +19,7 @@ import { useTitle, navigate, route } from '../router'
 import { formatRelative, formatAbsolute } from '../util/time'
 import './Notifications.css'
 
-type Filter = 'all' | 'mention' | 'follow' | 'reblog' | 'favourite'
+type Filter = 'all' | 'mention' | 'follow' | 'reblog' | 'favourite' | 'requests'
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -231,10 +232,17 @@ export function NotificationsView() {
   }
 
   useEffect(() => {
+    if (filter === 'requests') return // the Follow requests tab loads its own list
     void loadFirst(filter)
     void refreshFollowRequestCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter])
+
+  // Deep link: #/notifications?tab=requests (linked from the notification card).
+  const tabParam = route.value.query.get('tab')
+  useEffect(() => {
+    if (tabParam === 'requests') setFilter('requests')
+  }, [tabParam])
 
   // Pick up markers written by other devices (guarded to once per session).
   useEffect(() => {
@@ -290,6 +298,43 @@ export function NotificationsView() {
   // Grouping is derived from the flat items list so mutation handlers stay untouched.
   const entries = useMemo(() => groupNotifications(items), [items])
 
+  const tabs = (
+    <div class="notifications__filters" role="tablist" aria-label="Filter notifications">
+      {FILTERS.map((f) => (
+        <button
+          key={f.id}
+          role="tab"
+          aria-selected={filter === f.id}
+          class={`notifications__filter${filter === f.id ? ' notifications__filter--active' : ''}`}
+          onClick={() => selectFilter(f.id)}
+        >
+          {f.label}
+        </button>
+      ))}
+      <button
+        role="tab"
+        aria-selected={filter === 'requests'}
+        class={`notifications__filter${filter === 'requests' ? ' notifications__filter--active' : ''}`}
+        onClick={() => selectFilter('requests')}
+      >
+        Follow requests
+        {followRequestCount.value > 0 && <span class="notifications__filter-count">{followRequestCount.value}</span>}
+      </button>
+    </div>
+  )
+
+  if (filter === 'requests') {
+    return (
+      <div class="notifications">
+        <header class="view-header">
+          <h1>Notifications</h1>
+        </header>
+        {tabs}
+        <FollowRequestsList />
+      </div>
+    )
+  }
+
   return (
     <div class="notifications">
       <header class="view-header">
@@ -306,19 +351,7 @@ export function NotificationsView() {
         </div>
       </header>
 
-      <div class="notifications__filters" role="tablist" aria-label="Filter notifications">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            role="tab"
-            aria-selected={filter === f.id}
-            class={`notifications__filter${filter === f.id ? ' notifications__filter--active' : ''}`}
-            onClick={() => selectFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
+      {tabs}
 
       {pending.length > 0 && (
         <button class="notifications__new-pill rise-in" onClick={showPending}>
@@ -621,7 +654,7 @@ function NotificationRow({
 
       {n.type === 'follow_request' && account && (
         <div class="notifications__fr-actions">
-          <button class="btn" onClick={() => navigate('/follow_requests')}>
+          <button class="btn" onClick={() => navigate('/notifications?tab=requests')}>
             <Icon name="users" size={16} /> Review follow requests
           </button>
         </div>

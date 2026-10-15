@@ -153,9 +153,14 @@ export function ProfileView({ id }: { id: string }) {
 
       <div class="profile__actions">
         {own ? (
-          <button class="btn" onClick={() => setEditing(true)}>
-            <Icon name="pencil" size={16} /> Edit profile
-          </button>
+          <>
+            <a class="btn" href="#/wrapped">
+              <Icon name="sparkle" size={16} /> Wrapped
+            </a>
+            <button class="btn" onClick={() => setEditing(true)}>
+              <Icon name="pencil" size={16} /> Edit profile
+            </button>
+          </>
         ) : (
           <RelationshipActions id={account.id} acct={account.acct} />
         )}

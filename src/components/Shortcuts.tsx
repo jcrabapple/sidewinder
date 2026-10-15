@@ -69,7 +69,7 @@ const CHORDS: Record<string, string | (() => string)> = {
   s: '/lists',
   v: '/favourites',
   b: '/bookmarks',
-  r: '/follow_requests',
+  r: '/notifications?tab=requests',
   w: '/wrapped',
   ',': '/settings',
 }

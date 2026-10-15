@@ -29,6 +29,19 @@
   color: var(--accent);
 }
 
+.notifications__filter-count {
+  margin-left: var(--sp-2);
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+  font-size: var(--fs-xs);
+  line-height: 22px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .notifications__new-pill {
   position: sticky;
   top: 56px;

@@ -78,3 +78,9 @@ a.follow-requests__name:hover { text-decoration: underline; }
 }
 
 .follow-requests__more { margin: var(--sp-4) auto; }
+
+.follow-requests__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-2);
+}

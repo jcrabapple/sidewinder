@@ -183,6 +183,8 @@ body {
   border-radius: var(--radius-m);
   background: var(--surface-2);
   color: var(--fg);
+  /* .btn is also rendered as <a> (Wrapped on Profile); keep the global link underline off. */
+  text-decoration: none;
   font: inherit;
   font-weight: 600;
   font-size: var(--fs-s);

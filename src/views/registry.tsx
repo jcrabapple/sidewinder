@@ -12,6 +12,7 @@ import { FollowRequestsView } from './FollowRequests'
 import { AccountRelationshipsView } from './AccountRelationships'
 import { ModerationView } from './Moderation'
 import { SettingsView } from './Settings'
+import { ImportView } from './Import'
 import { navigate } from '../router'
 
 export function AppRoutes({ route }: { route: Route }) {
@@ -56,6 +57,9 @@ export function AppRoutes({ route }: { route: Route }) {
       return <WrappedView />
     case 'settings':
       return <SettingsView />
+    // Reached from the Settings "Import" card only; deliberately not a nav item.
+    case 'import':
+      return <ImportView />
     default:
       return <NotFound path={route.href} />
   }

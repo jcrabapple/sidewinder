@@ -197,6 +197,19 @@ export function SettingsView() {
 
       <HiddenBoostersSection />
 
+      <section class="settings__section card" aria-labelledby="settings-import">
+        <h2 id="settings-import">Import</h2>
+        <p class="help-text">
+          Bring follows, blocks and mutes over from a Mastodon or GoToSocial export. Sidewinder checks the files
+          first, then hands them to your server&rsquo;s importer.
+        </p>
+        <div>
+          <a class="btn" href="#/import" onClick={(e) => { e.preventDefault(); navigate('/import') }}>
+            <Icon name="upload" size={16} /> Import from a file
+          </a>
+        </div>
+      </section>
+
       {session && isAdminRole(session.account) && (
         <section class="settings__section card" aria-labelledby="settings-moderation">
           <h2 id="settings-moderation">Moderation</h2>

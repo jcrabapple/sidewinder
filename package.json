@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "emojis": "node scripts/build-emoji-data.mjs"
+    "emojis": "node scripts/build-emoji-data.mjs",
+    "test:import": "node --experimental-strip-types --test scripts/test-import-csv.mjs"
   },
   "dependencies": {
     "@preact/signals": "^2.11.2",

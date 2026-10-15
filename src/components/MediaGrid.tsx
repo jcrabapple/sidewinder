@@ -147,6 +147,7 @@ function Lightbox({
   onClose: () => void
 }) {
   const dlg = useRef<HTMLDialogElement>(null)
+  const [showAlt, setShowAlt] = useState(false)
   const media = items[index]
   const total = items.length
   const hasMultiple = total > 1
@@ -179,27 +180,36 @@ function Lightbox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, total, hasMultiple])
 
+  // Alt text is opt-in per image: closed when the user moves to another one.
+  useEffect(() => {
+    setShowAlt(false)
+  }, [index])
+
   return (
     <dialog
       ref={dlg}
       class="lightbox"
       aria-label="Media viewer"
-      onClick={(e) => { if (e.target === dlg.current) onClose() }}
+      onClick={(e) => {
+        // The inner box covers the whole viewport, so treat clicks on it (outside
+        // the image and controls) as clicks on the backdrop.
+        const t = e.target as HTMLElement
+        if (t === dlg.current || t.classList.contains('lightbox__inner')) onClose()
+      }}
       onClose={onClose}
     >
       <div class="lightbox__inner">
-        <div class="lightbox__bar">
-          {media.description ? (
-            <p class="lightbox__alt">{media.description}</p>
-          ) : (
-            <p class="lightbox__alt lightbox__alt--none">No description provided</p>
+        <img src={media.url ?? media.preview_url ?? ''} alt={media.description ?? ''} />
+
+        <div class="lightbox__top">
+          {hasMultiple && (
+            <span class="lightbox__counter num" aria-live="polite">
+              {index + 1} / {total}
+            </span>
           )}
           <div class="lightbox__controls">
             {hasMultiple && (
               <>
-                <span class="lightbox__counter num" aria-live="polite">
-                  {index + 1} / {total}
-                </span>
                 <button
                   class="icon-btn lightbox__nav"
                   onClick={prev}
@@ -223,7 +233,26 @@ function Lightbox({
             </button>
           </div>
         </div>
-        <img src={media.url ?? media.preview_url ?? ''} alt={media.description ?? ''} />
+
+        {media.description ? (
+          <>
+            <button
+              class="lightbox__alt-toggle"
+              aria-expanded={showAlt}
+              aria-controls="lightbox-alt-text"
+              onClick={() => setShowAlt((v) => !v)}
+            >
+              {showAlt ? 'Hide alt text' : 'Show alt text'}
+            </button>
+            {showAlt && (
+              <p id="lightbox-alt-text" class="lightbox__alt">
+                {media.description}
+              </p>
+            )}
+          </>
+        ) : (
+          <span class="lightbox__alt-toggle lightbox__alt-toggle--none">No alt text</span>
+        )}
       </div>
     </dialog>
   )

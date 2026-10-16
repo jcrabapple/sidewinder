@@ -43,6 +43,10 @@ data class AppSettings(
     val reduceMotion: Boolean = false,
     /** Live timeline streaming over WebSocket while the app is open. */
     val liveStreaming: Boolean = true,
+    /** Home/Local/Federated feed display filters (were per-screen chips). */
+    val showBoosts: Boolean = true,
+    val showReplies: Boolean = true,
+    val hideSelfBoosts: Boolean = false,
     /** Bundled color theme id (see AppThemes); unknown ids fall back to sidewinder. */
     val themeId: String = "sidewinder",
     /** Pure-black grounds in dark mode (legacy ThemePref.AMOLED migrated here). */
@@ -88,6 +92,9 @@ class SettingsStore(context: Context) {
         val liveStreaming: Boolean = true,
         val themeId: String = "sidewinder",
         val pureBlack: Boolean = false,
+        val showBoosts: Boolean = true,
+        val showReplies: Boolean = true,
+        val hideSelfBoosts: Boolean = false,
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -120,6 +127,9 @@ class SettingsStore(context: Context) {
                 reduceMotion = stored.reduceMotion,
                 liveStreaming = stored.liveStreaming,
                 themeId = stored.themeId,
+                showBoosts = stored.showBoosts,
+                showReplies = stored.showReplies,
+                hideSelfBoosts = stored.hideSelfBoosts,
             )
         }.getOrDefault(AppSettings())
     }
@@ -150,6 +160,9 @@ class SettingsStore(context: Context) {
                         reduceMotion = next.reduceMotion,
                         liveStreaming = next.liveStreaming,
                         themeId = next.themeId,
+                        showBoosts = next.showBoosts,
+                        showReplies = next.showReplies,
+                        hideSelfBoosts = next.hideSelfBoosts,
                         pureBlack = next.pureBlack,
                     ),
                 ),

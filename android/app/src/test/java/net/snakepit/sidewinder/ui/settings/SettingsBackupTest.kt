@@ -130,4 +130,26 @@ class SettingsBackupTest {
             assertEquals(theme.id, fullBackup(liveStreaming = true).copy(themeId = theme.id).toSettings().themeId)
         }
     }
+
+    @Test
+    fun `timeline display filters survive export and import`() {
+        val backup = fullBackup(liveStreaming = true).copy(showBoosts = false, showReplies = false, hideSelfBoosts = true)
+        val restored = json.decodeFromString(
+            SettingsBackup.serializer(),
+            json.encodeToString(SettingsBackup.serializer(), backup),
+        ).toSettings()
+        assertEquals(false, restored.showBoosts)
+        assertEquals(false, restored.showReplies)
+        assertEquals(true, restored.hideSelfBoosts)
+        assertEquals(restored, SettingsBackup.from(restored).toSettings())
+    }
+
+    @Test
+    fun `old export file without display filters keeps the old chip defaults`() {
+        val oldJson = """{"theme":"DARK","relativeTimes":true,"defaultVisibility":"public","requireAltText":true,"backgroundNotifications":false,"hideEngagementCounts":false,"confirmBeforeBoost":false,"confirmBeforeFollow":false,"hideMediaPreviews":false,"hideNoAltPosts":false,"collapseLongPosts":true,"dynamicColor":false,"textScale":1.0,"reduceMotion":false}"""
+        val restored = json.decodeFromString(SettingsBackup.serializer(), oldJson).toSettings()
+        assertTrue(restored.showBoosts)
+        assertTrue(restored.showReplies)
+        assertEquals(false, restored.hideSelfBoosts)
+    }
 }

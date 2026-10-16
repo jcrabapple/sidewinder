@@ -127,9 +127,11 @@ fun TimelineScreen(
     }
     val showJump by remember { derivedStateOf { listState.firstVisibleItemIndex > JUMP_THRESHOLD } }
     // Per-feed display filters (client-side over the loaded page set).
-    var showBoosts by rememberSaveable { mutableStateOf(true) }
-    var showReplies by rememberSaveable { mutableStateOf(true) }
-    var hideSelfBoosts by rememberSaveable { mutableStateOf(false) }
+    // Display filters are app settings now (Settings > Timelines), applied
+    // to the feeds that used to show the chip row.
+    val showBoosts = !showDisplayFilters || settings.showBoosts
+    val showReplies = !showDisplayFilters || settings.showReplies
+    val hideSelfBoosts = showDisplayFilters && settings.hideSelfBoosts
     // Rendered (filtered) row count and raw item count, written from
     // composition and read by the scroll effect. Kept as plain snapshot
     // state rather than reading `state` inside the snapshotFlow: a failed
@@ -363,7 +365,7 @@ fun TimelineScreen(
                     // infinite-scroll threshold; also the raw page-set size,
                     // so a page fully hidden by filters still advances paging.
                     SideEffect {
-                        renderedCount = items.size + if (showDisplayFilters) 1 else 0
+                        renderedCount = items.size
                         rawCount = s.items.size
                     }
                     LazyColumn(
@@ -372,18 +374,6 @@ fun TimelineScreen(
                         // Room below the last post so the compose FAB never covers it.
                         contentPadding = PaddingValues(bottom = 88.dp),
                     ) {
-                        if (showDisplayFilters) {
-                            item(key = "display-filters") {
-                                DisplayFilterRow(
-                                    showBoosts = showBoosts,
-                                    showReplies = showReplies,
-                                    hideSelfBoosts = hideSelfBoosts,
-                                    onShowBoosts = { showBoosts = it },
-                                    onShowReplies = { showReplies = it },
-                                    onHideSelfBoosts = { hideSelfBoosts = it },
-                                )
-                            }
-                        }
                         items(
                             count = items.size,
                             key = { items[it].id },
@@ -452,101 +442,6 @@ internal fun JumpToTopPill(onClick: () -> Unit) {
     }
 }
 
-/**
- * Client-side display filters for Home feeds: show/hide boosts, show/hide
- * replies, and hide boosts of your own posts. Filters apply to the loaded
- * page set; paging continues underneath.
- *
- * Design: icon-led filter chips — a leading icon shows what the chip
- * governs, and a small trailing check marks what's currently shown. Chips
- * sit in a horizontal pill tray; a leading tuning icon labels the tray so
- * the row reads as one control, not three stray buttons.
- */
-@Composable
-private fun DisplayFilterRow(
-    showBoosts: Boolean,
-    showReplies: Boolean,
-    hideSelfBoosts: Boolean,
-    onShowBoosts: (Boolean) -> Unit,
-    onShowReplies: (Boolean) -> Unit,
-    onHideSelfBoosts: (Boolean) -> Unit,
-) {
-    androidx.compose.foundation.lazy.LazyRow(
-        modifier = Modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        item(key = "tray-icon") {
-            Icon(
-                imageVector = Icons.Outlined.Tune,
-                contentDescription = "Filter this feed",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        item(key = "boosts") {
-            FilterChip(
-                selected = showBoosts,
-                onClick = { onShowBoosts(!showBoosts) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Outlined.Repeat,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
-                label = { Text("Boosts") },
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics {
-                        contentDescription = if (showBoosts) "Hide boosts" else "Show boosts"
-                    },
-            )
-        }
-        item(key = "replies") {
-            FilterChip(
-                selected = showReplies,
-                onClick = { onShowReplies(!showReplies) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Outlined.ChatBubbleOutline,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
-                label = { Text("Replies") },
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics {
-                        contentDescription = if (showReplies) "Hide replies" else "Show replies"
-                    },
-            )
-        }
-        item(key = "self-boosts") {
-            FilterChip(
-                selected = hideSelfBoosts,
-                onClick = { onHideSelfBoosts(!hideSelfBoosts) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Outlined.Repeat,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                },
-                // Fixed label: the selected state already shows it is on, and a
-                // longer "on" label pushed the chip past the right screen edge.
-                label = { Text("No self-boosts") },
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics {
-                        contentDescription =
-                            if (hideSelfBoosts) "Show boosts of your own posts again" else "Hide boosts of your own posts"
-                    },
-            )
-        }
-    }
-}
 
 /**
  * Scroll to the first item. From deep in a long feed, snap most of the

@@ -37,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -104,6 +105,10 @@ internal data class SettingsBackup(
     val themeId: String = "sidewinder",
     /** Default false; legacy AMOLED in [theme] still migrates below. */
     val pureBlack: Boolean = false,
+    /** Feed display filters; defaults match the old per-screen chips. */
+    val showBoosts: Boolean = true,
+    val showReplies: Boolean = true,
+    val hideSelfBoosts: Boolean = false,
 ) {
     fun toSettings(): AppSettings {
         val (mode, migratedPureBlack) = migrateTheme(theme, pureBlack)
@@ -125,6 +130,9 @@ internal data class SettingsBackup(
             reduceMotion = reduceMotion,
             liveStreaming = liveStreaming,
             themeId = if (AppThemes.all.any { it.id == themeId }) themeId else "sidewinder",
+            showBoosts = showBoosts,
+            showReplies = showReplies,
+            hideSelfBoosts = hideSelfBoosts,
         )
     }
 
@@ -146,6 +154,9 @@ internal data class SettingsBackup(
             reduceMotion = s.reduceMotion,
             liveStreaming = s.liveStreaming,
             themeId = s.themeId,
+            showBoosts = s.showBoosts,
+            showReplies = s.showReplies,
+            hideSelfBoosts = s.hideSelfBoosts,
             pureBlack = s.pureBlack,
         )
     }
@@ -281,6 +292,36 @@ fun SettingsScreen(
             onTextScale = { value -> apply { it.copy(textScale = value) } },
         )
 
+        SettingsSectionHeader("Timelines")
+        Text(
+            text = "Applies to the Home, Local and Federated feeds.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 4.dp),
+        )
+        ToggleRow(
+            title = "Show boosts",
+            subtitle = "Include posts other people boosted.",
+            checked = loaded.showBoosts,
+            label = "Show boosts toggle",
+            onCheckedChange = { value -> apply { it.copy(showBoosts = value) } },
+        )
+        ToggleRow(
+            title = "Show replies",
+            subtitle = "Include replies to other posts.",
+            checked = loaded.showReplies,
+            label = "Show replies toggle",
+            onCheckedChange = { value -> apply { it.copy(showReplies = value) } },
+        )
+        ToggleRow(
+            title = "Hide self-boosts",
+            subtitle = "Hide boosts where people share their own posts.",
+            checked = loaded.hideSelfBoosts,
+            label = "Hide self-boosts toggle",
+            onCheckedChange = { value -> apply { it.copy(hideSelfBoosts = value) } },
+        )
+
+        SettingsSectionHeader("General")
         ToggleRow(
             title = "Relative times",
             subtitle = "Show timestamps like \"3m\" instead of absolute dates.",
@@ -729,4 +770,16 @@ private fun SignOutRow(
             color = MaterialTheme.colorScheme.error,
         )
     }
+}
+
+/** Section heading matching the Appearance section's title style. */
+@Composable
+internal fun SettingsSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = Modifier
+            .padding(top = 16.dp, bottom = 8.dp)
+            .semantics { heading() },
+    )
 }

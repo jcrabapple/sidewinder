@@ -1,0 +1,8 @@
+<resources>
+    <color name="ic_launcher_background">#101411</color>
+    <!-- Viper palette grounds from the web tokens (src/app.css); used as
+         the pre-first-frame window background so cold start never flashes
+         the wrong theme. -->
+    <color name="window_background_light">#F2F5F3</color>
+    <color name="window_background_dark">#101411</color>
+</resources>

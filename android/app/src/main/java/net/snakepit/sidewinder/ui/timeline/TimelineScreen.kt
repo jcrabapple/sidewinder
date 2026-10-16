@@ -1,0 +1,353 @@
+package net.snakepit.sidewinder.ui.timeline
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
+import net.snakepit.sidewinder.core.model.Session
+import net.snakepit.sidewinder.core.model.Status
+import net.snakepit.sidewinder.core.network.Api
+import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.timeline.TimelineRepository
+import net.snakepit.sidewinder.core.timeline.TimelineSource
+import net.snakepit.sidewinder.core.timeline.label
+
+/** Show the jump pill once the user is this many items deep. */
+private const val JUMP_THRESHOLD = 4
+
+/**
+ * Any paged status timeline: home, local, federated, a hashtag (the
+ * instance's own tag timeline, so posts federated here, never the
+ * origin server's tag page), bookmarks, or favourites. [source] wins;
+ * otherwise [tag] selects a hashtag timeline (milestone-5 signature),
+ * otherwise home.
+ *
+ * Link-header max_id paging with infinite scroll, pull-to-refresh that
+ * replaces the items with a fresh first page, the four mandatory states,
+ * and jump-to-top: a floating "Back to top" pill once scrolled down, plus
+ * [scrollToTop] events (bottom-nav reselect) that scroll to the top, or
+ * refresh when already there.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TimelineScreen(
+    api: Api,
+    session: Session,
+    tag: String? = null,
+    onOpenThread: (String) -> Unit,
+    onCompose: (String?) -> Unit,
+    source: TimelineSource? = null,
+    scrollToTop: Flow<Unit>? = null,
+) {
+    val resolved: TimelineSource = source ?: tag?.let { TimelineSource.Hashtag(it) } ?: TimelineSource.Home
+    val label = resolved.label
+    // Posts + scroll position live in the store, not in composition, so
+    // returning from a post (or another tab) resumes exactly where you were.
+    val holder = remember(session.id, resolved) { TimelineStore.holder(session.id, resolved) }
+    var state by holder::state
+    var isRefreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val listState = rememberLazyListState(holder.firstVisibleIndex, holder.firstVisibleOffset)
+    DisposableEffect(holder, listState) {
+        onDispose {
+            holder.firstVisibleIndex = listState.firstVisibleItemIndex
+            holder.firstVisibleOffset = listState.firstVisibleItemScrollOffset
+        }
+    }
+    val showJump by remember { derivedStateOf { listState.firstVisibleItemIndex > JUMP_THRESHOLD } }
+
+    suspend fun fetchFirstPage(): TimelineState {
+        val page = TimelineRepository.fetch(api, resolved)
+        val fresh = page.items.distinctBy { it.id }
+        return if (fresh.isEmpty()) TimelineState.Empty else TimelineState.Content(fresh, page.nextMaxId, loadingMore = false)
+    }
+
+    suspend fun loadFirstPage() {
+        state = TimelineState.Loading
+        state = try {
+            fetchFirstPage()
+        } catch (e: ApiError) {
+            TimelineState.Error("Could not load the $label: the server returned error ${e.status}. Check your connection, then retry.")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            TimelineState.Error("Could not load the $label: ${e.message ?: "network error"}. Check your connection, then retry.")
+        }
+    }
+
+    fun updateStatus(updated: Status) {
+        val current = state as? TimelineState.Content ?: return
+        state = current.copy(items = current.items.map { if (it.id == updated.id) updated else it })
+        // Same post in other cached feeds (Home vs Local, boosts of it) too.
+        TimelineStore.applyEdit(updated.reblog ?: updated)
+    }
+
+    fun showNotice(message: String) {
+        scope.launch { snackbarHostState.showSnackbar(message) }
+    }
+
+    // One load-more at a time; guarded again inside loadNextPage so a
+    // second trigger cannot double-fetch the same page.
+    fun loadNextPage() {
+        val current = state as? TimelineState.Content ?: return
+        val maxId = current.nextMaxId ?: return // end reached
+        if (current.loadingMore) return
+
+        state = current.copy(loadingMore = true)
+        scope.launch {
+            try {
+                val page = TimelineRepository.fetch(api, resolved, maxId)
+                // Re-read: a favourite/boost may have landed while loading.
+                val base = (state as? TimelineState.Content)?.items ?: current.items
+                val baseIds = base.mapTo(HashSet()) { it.id }
+                val fresh = page.items.filterNot { it.id in baseIds }
+                state = TimelineState.Content(base + fresh, page.nextMaxId, loadingMore = false)
+            } catch (e: ApiError) {
+                (state as? TimelineState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
+                showNotice("Could not load older posts: the server returned error ${e.status}. Scroll to try again.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                (state as? TimelineState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
+                showNotice("Could not load older posts: ${e.message ?: "network error"}. Scroll to try again.")
+            }
+        }
+    }
+
+    // Pull-to-refresh: re-fetch page 1 and replace the current items.
+    // The list state is kept, so keyed items that persist hold their
+    // scroll position. On failure the old items stay and a snackbar
+    // explains the error and recovery. Works from Empty too, so a new
+    // account's empty feed can be pulled once posts arrive.
+    fun refresh() {
+        val current = state
+        if (current is TimelineState.Error) {
+            scope.launch { loadFirstPage() }
+            return
+        }
+        if (current !is TimelineState.Content && current !is TimelineState.Empty) return
+        if (isRefreshing || (current is TimelineState.Content && current.loadingMore)) return
+
+        isRefreshing = true
+        scope.launch {
+            try {
+                state = fetchFirstPage()
+            } catch (e: ApiError) {
+                showNotice("Could not refresh the $label: the server returned error ${e.status}. Pull down to try again.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("Could not refresh the $label: ${e.message ?: "network error"}. Pull down to try again.")
+            } finally {
+                isRefreshing = false
+            }
+        }
+    }
+
+    // Load only what the store does not already hold. A load abandoned when
+    // the user navigated away mid-request left Loading (refetch) or a stuck
+    // loadingMore flag (clear it so infinite scroll works again).
+    LaunchedEffect(api, session.id, resolved) {
+        when (val current = state) {
+            TimelineState.Loading, is TimelineState.Error -> loadFirstPage()
+            is TimelineState.Content -> if (current.loadingMore) state = current.copy(loadingMore = false)
+            TimelineState.Empty -> Unit
+        }
+    }
+
+    // Bottom-nav reselect: scroll up, or refresh when already at the top.
+    LaunchedEffect(scrollToTop) {
+        scrollToTop?.collect {
+            val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            if (atTop) refresh() else listState.jumpToTopSmoothly()
+        }
+    }
+
+    // Infinite scroll: trigger one page ahead of the last visible item.
+    // Both the last visible index and the state are read inside the
+    // snapshotFlow so a fresh page (or end of feed) re-evaluates, and
+    // loadNextPage re-checks the guards so this cannot double-fetch.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible to state
+        }.collect { (lastVisible, snapshot) ->
+            val current = snapshot as? TimelineState.Content ?: return@collect
+            if (current.nextMaxId == null || current.loadingMore) return@collect
+            if (lastVisible >= current.items.size - 3) loadNextPage()
+        }
+    }
+
+    Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { refresh() },
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) {
+            when (val s = state) {
+                TimelineState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.semantics { contentDescription = "Loading the $label" },
+                    )
+                }
+
+                is TimelineState.Error -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(s.message, style = MaterialTheme.typography.bodyMedium)
+                        Button(
+                            onClick = { scope.launch { loadFirstPage() } },
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .semantics { contentDescription = "Retry loading the $label" },
+                        ) {
+                            Text("Retry")
+                        }
+                    }
+                }
+
+                // A LazyColumn (not a Box) so pull-to-refresh works on an empty feed.
+                TimelineState.Empty -> LazyColumn(Modifier.fillMaxSize()) {
+                    item(key = "empty") {
+                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text(text = emptyCopy(resolved), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+
+                is TimelineState.Content -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // Room below the last post so the compose FAB never covers it.
+                    contentPadding = PaddingValues(bottom = 88.dp),
+                ) {
+                    items(count = s.items.size, key = { s.items[it].id }) { index ->
+                        StatusCard(
+                            status = s.items[index],
+                            api = api,
+                            baseUrl = session.base,
+                            onStatusUpdated = { updateStatus(it) },
+                            onNotice = { showNotice(it) },
+                            onOpenThread = onOpenThread,
+                            onCompose = { replyToId -> onCompose(replyToId) },
+                        )
+                        if (index < s.items.lastIndex) HorizontalDivider()
+                    }
+                    if (s.loadingMore) {
+                        item(key = "loading-more") {
+                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.semantics { contentDescription = "Loading older posts" },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showJump && state is TimelineState.Content,
+                enter = fadeIn() + slideInVertically { -it },
+                exit = fadeOut() + slideOutVertically { -it },
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+            ) {
+                JumpToTopPill(onClick = { scope.launch { listState.jumpToTopSmoothly() } })
+            }
+        }
+    }
+}
+
+/** Floating "Back to top" pill shown once the user has scrolled down. */
+@Composable
+internal fun JumpToTopPill(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 4.dp,
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .semantics { contentDescription = "Back to top" },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Icon(Icons.Filled.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Back to top", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/**
+ * Scroll to the first item. From deep in a long feed, snap most of the
+ * way first so the animation is short instead of a multi-second scroll.
+ */
+internal suspend fun LazyListState.jumpToTopSmoothly() {
+    if (firstVisibleItemIndex > 15) scrollToItem(8)
+    animateScrollToItem(0)
+}
+
+private fun emptyCopy(source: TimelineSource): String = when (source) {
+    TimelineSource.Home -> "Your home timeline is empty. Follow some accounts and their posts will appear here."
+    TimelineSource.Local -> "No posts from this server yet. Public posts by people on your instance will appear here."
+    TimelineSource.Federated -> "No public posts have reached this server yet. They will appear here as they federate in."
+    is TimelineSource.Hashtag ->
+        "No posts with #${source.name} have reached this server yet. Tagged posts appear here as they federate in."
+    TimelineSource.Bookmarks -> "No bookmarks yet. Tap the bookmark icon on any post to save it here."
+    TimelineSource.Favourites -> "No favourites yet. Posts you favourite will be listed here."
+}

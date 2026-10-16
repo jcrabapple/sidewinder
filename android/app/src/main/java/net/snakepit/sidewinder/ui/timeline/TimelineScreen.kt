@@ -350,4 +350,6 @@ private fun emptyCopy(source: TimelineSource): String = when (source) {
         "No posts with #${source.name} have reached this server yet. Tagged posts appear here as they federate in."
     TimelineSource.Bookmarks -> "No bookmarks yet. Tap the bookmark icon on any post to save it here."
     TimelineSource.Favourites -> "No favourites yet. Posts you favourite will be listed here."
+    is TimelineSource.ListTimeline ->
+        "The list \"${source.title}\" has no posts yet. Add accounts to it from Settings, then Lists."
 }

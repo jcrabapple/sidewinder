@@ -18,13 +18,18 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -76,6 +81,7 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.notify.NotifyScheduler
+import net.snakepit.sidewinder.core.notifications.UnreadStore
 import net.snakepit.sidewinder.core.search.SearchRepository
 import net.snakepit.sidewinder.core.settings.AppSettings
 import net.snakepit.sidewinder.core.settings.SettingsStore
@@ -83,6 +89,11 @@ import net.snakepit.sidewinder.core.settings.ThemePref
 import net.snakepit.sidewinder.core.thread.ThreadRepository
 import net.snakepit.sidewinder.core.timeline.TimelineSource
 import net.snakepit.sidewinder.ui.account.AccountSwitcher
+import net.snakepit.sidewinder.ui.catchup.CatchUpScreen
+import net.snakepit.sidewinder.ui.insights.InsightsScreen
+import net.snakepit.sidewinder.ui.lists.ListMembersScreen
+import net.snakepit.sidewinder.ui.lists.ListsScreen
+import net.snakepit.sidewinder.ui.moderation.ModerationScreen
 import net.snakepit.sidewinder.ui.app.AppActions
 import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
@@ -191,6 +202,8 @@ private fun AppRoot(activity: MainActivity) {
     var settings by remember { mutableStateOf(AppSettings()) }
     var loginError by remember { mutableStateOf<String?>(null) }
     var askedPermission by remember { mutableStateOf(false) }
+    val unreadStore = remember { UnreadStore(activity) }
+    var unreadCount by remember { mutableStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
     val redirect by activity.redirectUri
 
@@ -202,7 +215,19 @@ private fun AppRoot(activity: MainActivity) {
         settings = settingsStore.settings()
         sessions = store.list()
         session = store.active()
+        // Seed the badge from the cached count, then recount over the
+        // newest window so the badge is honest before the first render.
+        session?.let { s -> unreadCount = unreadStore.count(s.id) }
         sessionLoaded = true
+    }
+
+    // Recount unread notifications whenever the active account changes.
+    LaunchedEffect(session?.id, sessionLoaded) {
+        val s = session ?: return@LaunchedEffect
+        if (!sessionLoaded) return@LaunchedEffect
+        unreadCount = runCatching {
+            UnreadStore.recount(Api(s.base, s.token), s.id, unreadStore)
+        }.getOrDefault(unreadStore.count(s.id))
     }
 
     // Keep background polling in step with the setting and the session,
@@ -275,6 +300,9 @@ private fun AppRoot(activity: MainActivity) {
                         sessions = sessions,
                         store = store,
                         settingsStore = settingsStore,
+                        unreadStore = unreadStore,
+                        unreadCount = unreadCount,
+                        onUnreadChanged = { unreadCount = it },
                         onSessionsChanged = {
                             sessions = store.list()
                             session = store.active()
@@ -305,6 +333,9 @@ private fun AppTabs(
     sessions: List<Session>,
     store: SessionStore,
     settingsStore: SettingsStore,
+    unreadStore: UnreadStore,
+    unreadCount: Int,
+    onUnreadChanged: (Int) -> Unit,
     onSessionsChanged: suspend () -> Unit,
     onSettingsChanged: suspend () -> Unit,
 ) {
@@ -399,8 +430,26 @@ private fun AppTabs(
                     // pads the content below the status bar); the default
                     // windowInsets would add that height a second time.
                     windowInsets = WindowInsets(0, 0, 0, 0),
-                    title = { Text("Sidewinder") },
+                    title = {
+                        Text(
+                            "Sidewinder",
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    },
                     actions = {
+                        IconButton(
+                            onClick = { nav.navigate("catchup") },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(Icons.Filled.History, contentDescription = "Catch up on posts you missed")
+                        }
+                        IconButton(
+                            onClick = { nav.navigate("insights") },
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Icon(Icons.Filled.QueryStats, contentDescription = "Your posting insights")
+                        }
                         AccountSwitcher(
                             sessions = sessions,
                             active = session,
@@ -462,6 +511,8 @@ private fun AppTabs(
             if (currentRoute in topLevelRoutes) {
                 NavigationBar {
                     TopLevel.entries.forEach { item ->
+                        val badgeCount = if (item == TopLevel.Notifications) unreadCount else 0
+                        val badgeLabel = if (badgeCount >= UnreadStore.WINDOW) "${UnreadStore.WINDOW}+" else badgeCount.toString()
                         NavigationBarItem(
                             selected = currentRoute == item.route,
                             onClick = {
@@ -471,7 +522,20 @@ private fun AppTabs(
                                     navigateTopLevel(item.route)
                                 }
                             },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
+                            icon = {
+                                if (badgeCount > 0) {
+                                    BadgedBox(
+                                        badge = { Badge { Text(badgeLabel) } },
+                                    ) {
+                                        Icon(
+                                            item.icon,
+                                            contentDescription = "${item.label}, $badgeLabel unread",
+                                        )
+                                    }
+                                } else {
+                                    Icon(item.icon, contentDescription = item.label)
+                                }
+                            },
                             label = { Text(item.label) },
                         )
                     }
@@ -520,6 +584,12 @@ private fun AppTabs(
                         onOpenThread = openThread,
                         onOpenProfile = openProfile,
                         onOpenFollowRequests = { nav.navigate("follow_requests") },
+                        onNewestLoaded = { newest ->
+                            if (newest != null) scope.launch {
+                                unreadStore.setSeenTop(session.id, newest)
+                                onUnreadChanged(0)
+                            }
+                        },
                     )
                 }
             }
@@ -540,6 +610,8 @@ private fun AppTabs(
                         sessionStore = store,
                         onSessionsChanged = onSessionsChanged,
                         onSettingsChanged = onSettingsChanged,
+                        onOpenModeration = { nav.navigate("moderation") },
+                        onOpenLists = { nav.navigate("lists") },
                     )
                 }
             }
@@ -705,6 +777,66 @@ private fun AppTabs(
                         onCompose = openCompose,
                         source = TimelineSource.Favourites,
                     )
+                }
+            }
+            composable("lists") {
+                key(session.id) {
+                    ListsScreen(
+                        api = api,
+                        session = session,
+                        onOpenList = { record ->
+                            nav.navigate("list_members/${record.id}/${Uri.encode(record.title)}")
+                        },
+                    )
+                }
+            }
+            composable("list_members/{id}/{title}") { entry ->
+                val id = entry.arguments?.getString("id")
+                val title = entry.arguments?.getString("title").orEmpty()
+                if (id == null) {
+                    PlaceholderScreen("That list link is malformed.")
+                } else {
+                    key(session.id, id) {
+                        ListMembersScreen(
+                            api = api,
+                            session = session,
+                            listId = id,
+                            listTitle = title,
+                            onOpenTimeline = { nav.navigate("list_tl/$id/${Uri.encode(title)}") },
+                        )
+                    }
+                }
+            }
+            composable("list_tl/{id}/{title}") { entry ->
+                val id = entry.arguments?.getString("id")
+                val title = entry.arguments?.getString("title").orEmpty()
+                if (id == null) {
+                    PlaceholderScreen("That list link is malformed.")
+                } else {
+                    key(session.id, id) {
+                        TimelineScreen(
+                            api = api,
+                            session = session,
+                            onOpenThread = openThread,
+                            onCompose = openCompose,
+                            source = TimelineSource.ListTimeline(id, title),
+                        )
+                    }
+                }
+            }
+            composable("catchup") {
+                key(session.id) {
+                    CatchUpScreen(api = api, session = session)
+                }
+            }
+            composable("insights") {
+                key(session.id) {
+                    InsightsScreen(api = api, session = session)
+                }
+            }
+            composable("moderation") {
+                key(session.id) {
+                    ModerationScreen(api = api, session = session)
                 }
             }
             composable("tag/{name}") { entry ->

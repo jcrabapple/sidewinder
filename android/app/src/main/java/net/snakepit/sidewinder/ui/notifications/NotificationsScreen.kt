@@ -112,6 +112,9 @@ fun NotificationsScreen(
     onOpenThread: (String) -> Unit,
     onOpenProfile: (String) -> Unit,
     onOpenFollowRequests: () -> Unit,
+    /** Fires after an unfiltered first page loads: the newest notification
+     *  id (or null when empty), so the shell can advance the read mark. */
+    onNewestLoaded: (String?) -> Unit = {},
 ) {
     var filter by rememberSaveable { mutableStateOf(NotificationFilter.All) }
     var state by remember { mutableStateOf<NotificationsState>(NotificationsState.Loading) }
@@ -124,6 +127,9 @@ fun NotificationsScreen(
         state = try {
             val page = NotificationsRepository.notifications(api, types = filter.typesParam())
             val fresh = page.items.distinctBy { it.id }
+            // Only the unfiltered view advances the shared read mark:
+            // a filtered page's newest id is not the stream's newest.
+            if (filter == NotificationFilter.All) onNewestLoaded(fresh.firstOrNull()?.id)
             if (fresh.isEmpty()) NotificationsState.Empty
             else NotificationsState.Content(fresh, page.nextMaxId, loadingMore = false)
         } catch (e: ApiError) {

@@ -75,6 +75,8 @@ fun SettingsScreen(
     sessionStore: SessionStore,
     onSessionsChanged: suspend () -> Unit,
     onSettingsChanged: suspend () -> Unit = {},
+    onOpenModeration: () -> Unit = {},
+    onOpenLists: () -> Unit = {},
 ) {
     var settings by remember { mutableStateOf<AppSettings?>(null) }
     var confirmSignOut by remember { mutableStateOf(false) }
@@ -165,6 +167,46 @@ fun SettingsScreen(
             label = "Background notifications toggle",
             onCheckedChange = { value -> apply { it.copy(backgroundNotifications = value) } },
         )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(onClick = onOpenLists)
+                .semantics { contentDescription = "Manage your lists" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Lists", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Create lists of accounts and follow their timelines.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        if (session.scopes?.split(Regex("\\s+"))?.contains("admin") == true) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 48.dp)
+                    .clickable(onClick = onOpenModeration)
+                    .semantics { contentDescription = "Open moderation tools" }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(text = "Moderation", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        text = "Approve signups, handle reports, suspend accounts, manage domain blocks.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 

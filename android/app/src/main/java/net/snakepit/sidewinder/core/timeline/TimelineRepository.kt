@@ -55,6 +55,7 @@ object TimelineRepository {
             is TimelineSource.Hashtag -> "/api/v1/timelines/tag/${Uri.encode(source.name)}" to emptyMap()
             TimelineSource.Bookmarks -> "/api/v1/bookmarks" to emptyMap()
             TimelineSource.Favourites -> "/api/v1/favourites" to emptyMap()
+            is TimelineSource.ListTimeline -> "/api/v1/timelines/list/${source.id}" to emptyMap()
         }
         return api.page(path = path, serializer = ListSerializer(Status.serializer()), query = query, maxId = maxId)
     }
@@ -91,6 +92,9 @@ sealed interface TimelineSource {
     data class Hashtag(val name: String) : TimelineSource
     data object Bookmarks : TimelineSource
     data object Favourites : TimelineSource
+
+    /** Posts from one of the user's lists; [title] only labels the source. */
+    data class ListTimeline(val id: String, val title: String) : TimelineSource
 }
 
 /** Lowercase noun phrase for messages ("home timeline", "#art timeline"). */
@@ -102,4 +106,5 @@ val TimelineSource.label: String
         is TimelineSource.Hashtag -> "#$name timeline"
         TimelineSource.Bookmarks -> "bookmarks"
         TimelineSource.Favourites -> "favourites"
+        is TimelineSource.ListTimeline -> "$title list timeline"
     }

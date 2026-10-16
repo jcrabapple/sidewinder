@@ -74,6 +74,7 @@ import net.snakepit.sidewinder.core.moderation.ModerationRepository.AdminReport
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 private val TAB_LABELS = listOf("Signups", "Reports", "Accounts", "Domains")
 
@@ -1080,6 +1081,7 @@ private fun DomainsTab(api: Api) {
             Switch(
                 checked = obfuscate,
                 onCheckedChange = null,
+                colors = appSwitchColors(),
                 modifier = Modifier.clearAndSetSemantics { },
             )
         }

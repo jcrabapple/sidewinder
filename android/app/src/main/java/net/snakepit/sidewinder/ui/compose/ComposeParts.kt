@@ -72,6 +72,7 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.text.StatusText
 import org.jsoup.Jsoup
+import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 /** Capitalize sentences everywhere the user writes prose (posts, CW, alt text, polls). */
 internal val ProseKeyboard = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
@@ -472,6 +473,7 @@ internal fun PollEditor(
             Switch(
                 checked = multiple,
                 onCheckedChange = null,
+                colors = appSwitchColors(),
                 modifier = Modifier.clearAndSetSemantics { },
             )
         }

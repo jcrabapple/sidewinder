@@ -87,12 +87,12 @@ internal fun mixTowardBackground(accent: Color, bg: Color, fraction: Float): Col
  * containers to pure black and keeps everything else.
  */
 /** WCAG relative luminance (sRGB). */
-private fun relLum(c: Color): Double {
+internal fun relLum(c: Color): Double {
     fun lin(x: Float): Double { val v = x.toDouble(); return if (v <= 0.03928) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4) }
     return 0.2126 * lin(c.red) + 0.7152 * lin(c.green) + 0.0722 * lin(c.blue)
 }
 
-private fun contrast(a: Color, b: Color): Double {
+internal fun contrast(a: Color, b: Color): Double {
     val la = relLum(a); val lb = relLum(b)
     return (maxOf(la, lb) + 0.05) / (minOf(la, lb) + 0.05)
 }
@@ -115,6 +115,22 @@ private fun ThemePalette.readableTint(hue: Color, ground: Color, maxFraction: Fl
         f -= 0.025f
     }
     return ground
+}
+
+/**
+ * Material paints control borders, the off-switch knob and text-field
+ * outlines with `outline`, over `surface` and the switch track
+ * (`surfaceContainerHighest` = surface3). Several palettes' border colors
+ * sat at 1.0-1.7:1 there (the off knob vanished), so fall back to the
+ * palette's muted text color when the border color misses 3:1 on either.
+ */
+internal fun ThemePalette.controlOutline(surface: Color): Color {
+    fun ok(c: Color) = contrast(c, surface) >= 3.0 && contrast(c, surface3) >= 3.0
+    return when {
+        ok(outline) -> outline
+        ok(fgMuted) -> fgMuted
+        else -> fg
+    }
 }
 
 fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
@@ -140,7 +156,7 @@ fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
         surfaceContainer = surface2,
         surfaceContainerHigh = surface2,
         surfaceContainerHighest = surface3,
-        outline = outline,
+        outline = controlOutline(surface),
         outlineVariant = outlineVariant,
         error = danger,
         onError = bg,
@@ -179,7 +195,7 @@ fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
         surfaceContainer = surface2,
         surfaceContainerHigh = surface2,
         surfaceContainerHighest = surface3,
-        outline = outline,
+        outline = controlOutline(surface),
         outlineVariant = outlineVariant,
         error = danger,
         onError = surface,

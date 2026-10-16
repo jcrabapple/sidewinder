@@ -58,6 +58,7 @@ import net.snakepit.sidewinder.core.settings.SettingsStore
 import net.snakepit.sidewinder.core.settings.ThemePref
 import net.snakepit.sidewinder.core.settings.migrateTheme
 import net.snakepit.sidewinder.ui.theme.AppThemes
+import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 private val visibilityLabels = mapOf(
     "public" to "Public",
@@ -731,7 +732,12 @@ internal fun ToggleRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                // Dimmed (still readable) when the row is unavailable.
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
@@ -741,6 +747,8 @@ internal fun ToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = null,
+            enabled = enabled,
+            colors = appSwitchColors(),
             modifier = Modifier
                 .padding(start = 16.dp)
                 .clearAndSetSemantics { },

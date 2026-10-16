@@ -61,6 +61,7 @@ import net.snakepit.sidewinder.core.profile.ProfileRepository
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 private sealed interface EditState {
     data object Loading : EditState
@@ -420,6 +421,7 @@ private fun ToggleRowEdit(title: String, body: String, checked: Boolean, onCheck
         Switch(
             checked = checked,
             onCheckedChange = null,
+            colors = appSwitchColors(),
             modifier = Modifier.clearAndSetSemantics { },
         )
     }

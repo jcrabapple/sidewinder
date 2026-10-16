@@ -56,6 +56,7 @@ import net.snakepit.sidewinder.core.oauth.loginErrorMessage
 import net.snakepit.sidewinder.R
 import androidx.compose.ui.res.painterResource
 import net.snakepit.sidewinder.core.oauth.savePendingLogin
+import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 /** The default server suggested on the sign-in screen. Same default as the web app. */
 private const val DEFAULT_BASE = "https://gts.example.org"
@@ -257,6 +258,7 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
             Switch(
                 checked = adminScopes,
                 onCheckedChange = null,
+                colors = appSwitchColors(),
                 // The row is the toggle; keep the Switch out of the
                 // semantics tree so the state is announced once.
                 modifier = Modifier.clearAndSetSemantics { },

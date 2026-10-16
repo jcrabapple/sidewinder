@@ -50,14 +50,10 @@ fun EmojiText(
         }
     }
     val boxSize: TextUnit = if (style.fontSize.isSpecified) style.fontSize * 1.25f else 18.sp
-    Text(
-        text = annotated,
-        style = style,
-        color = color,
-        maxLines = maxLines,
-        overflow = overflow,
-        modifier = modifier,
-        inlineContent = emojis.associate { emoji ->
+    // Keyed on (emojis, boxSize): rebuilding the map per recomposition is
+    // wasted allocation when neither changed (K85/G2-19).
+    val inlineContent = remember(emojis, boxSize) {
+        emojis.associate { emoji ->
             emoji.url to InlineTextContent(
                 Placeholder(boxSize, boxSize, PlaceholderVerticalAlign.TextCenter),
             ) {
@@ -68,6 +64,15 @@ fun EmojiText(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-        },
+        }
+    }
+    Text(
+        text = annotated,
+        style = style,
+        color = color,
+        maxLines = maxLines,
+        overflow = overflow,
+        modifier = modifier,
+        inlineContent = inlineContent,
     )
 }

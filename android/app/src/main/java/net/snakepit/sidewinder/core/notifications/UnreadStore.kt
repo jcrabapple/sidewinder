@@ -1,6 +1,10 @@
 package net.snakepit.sidewinder.core.notifications
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import net.snakepit.sidewinder.core.model.Notification
@@ -47,18 +51,22 @@ class UnreadStore(context: Context) {
         }
     }
 
-    fun seenTop(sessionId: String): String? = read().seenTop[sessionId]
+    suspend fun seenTop(sessionId: String): String? = withStore { read().seenTop[sessionId] }
 
-    fun setSeenTop(sessionId: String, id: String) {
-        val stored = read()
-        write(stored.copy(seenTop = stored.seenTop + (sessionId to id)))
+    suspend fun setSeenTop(sessionId: String, id: String) {
+        withStore {
+            val stored = read()
+            write(stored.copy(seenTop = stored.seenTop + (sessionId to id)))
+        }
     }
 
-    fun count(sessionId: String): Int = read().counts[sessionId] ?: 0
+    suspend fun count(sessionId: String): Int = withStore { read().counts[sessionId] ?: 0 }
 
-    fun setCount(sessionId: String, count: Int) {
-        val stored = read()
-        write(stored.copy(counts = stored.counts + (sessionId to count)))
+    suspend fun setCount(sessionId: String, count: Int) {
+        withStore {
+            val stored = read()
+            write(stored.copy(counts = stored.counts + (sessionId to count)))
+        }
     }
 
     companion object {
@@ -66,6 +74,18 @@ class UnreadStore(context: Context) {
         const val WINDOW = 40
 
         private val PAGE_SERIALIZER = ListSerializer(Notification.serializer())
+
+        /**
+         * Process-wide serialization for every read-modify-write: three
+         * UnreadStore instances exist (MainActivity, notifications screen,
+         * NotifyWorker) and the backing file is shared.
+         */
+        private val mutex = Mutex()
+
+        /** Run [block] on IO, serialized against the other instances. */
+        private suspend fun <T> withStore(block: () -> T): T = mutex.withLock {
+            withContext(Dispatchers.IO) { block() }
+        }
 
         /**
          * Recount unread notifications for [sessionId] over the newest

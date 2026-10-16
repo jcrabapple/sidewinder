@@ -121,14 +121,21 @@ fun MediaViewer(
         var chromeVisible by remember { mutableStateOf(true) }
         var altOpen by remember { mutableStateOf(false) }
         var notice by remember { mutableStateOf<String?>(null) }
+        // Sequence counter, not the string: two saves can produce the same
+        // notice text, and keying on the string would not restart the timer.
+        var noticeSeq by remember { mutableStateOf(0) }
+        fun showNotice(message: String) {
+            notice = message
+            noticeSeq += 1
+        }
 
         // Alt panel and zoom never carry over to another page.
         LaunchedEffect(pagerState.currentPage) {
             altOpen = false
             zoomed = false
         }
-        LaunchedEffect(notice) {
-            if (notice != null) {
+        LaunchedEffect(noticeSeq) {
+            if (noticeSeq > 0) {
                 kotlinx.coroutines.delay(2500)
                 notice = null
             }
@@ -194,7 +201,7 @@ fun MediaViewer(
                             description = "Share media link",
                         ) { Icon(Icons.Filled.Share, contentDescription = null, tint = Color.White) }
                         OverlayIconButton(
-                            onClick = { notice = saveMedia(context, current) },
+                            onClick = { showNotice(saveMedia(context, current)) },
                             description = "Save to device",
                         ) { Icon(Icons.Filled.Download, contentDescription = null, tint = Color.White) }
                         OverlayIconButton(

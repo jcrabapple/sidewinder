@@ -27,6 +27,13 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import net.snakepit.sidewinder.core.model.Session
 
+/** The host of a session's base URL, or the base itself when parsing fails. */
+internal fun sessionHost(base: String): String = try {
+    java.net.URI(base).host?.takeIf { it.isNotBlank() } ?: base
+} catch (_: Exception) {
+    base
+}
+
 /**
  * Account avatar button + session dropdown for the top app bar.
  * [active] is highlighted; [onSelect] switches the active session and
@@ -86,7 +93,17 @@ fun AccountSwitcher(
         if (shortcuts.isNotEmpty()) HorizontalDivider()
         sessions.forEach { candidate ->
             DropdownMenuItem(
-                text = { Text("@${candidate.account.acct}") },
+                // Host after the acct so two @alice sessions on different
+                // servers are distinguishable.
+                text = {
+                    Text(
+                        if (sessions.any { it.account.acct == candidate.account.acct && it.id != candidate.id }) {
+                            "@${candidate.account.acct} · ${sessionHost(candidate.base)}"
+                        } else {
+                            "@${candidate.account.acct}"
+                        },
+                    )
+                },
                 leadingIcon = {
                     AsyncImage(
                         model = candidate.account.avatar_static?.ifEmpty { candidate.account.avatar }

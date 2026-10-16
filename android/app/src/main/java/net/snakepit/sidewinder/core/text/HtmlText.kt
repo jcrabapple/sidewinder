@@ -73,7 +73,7 @@ private val BLOCK_TAGS = setOf("p", "blockquote", "ul", "ol", "li", "pre")
 
 /** Matches an allowed absolute URL: Kotlin's [Regex.matches] requires the
  *  WHOLE string to match, so this must cover the full URL, not just the scheme. */
-private const val ALLOWED_HREF_SCHEMES = "^(https?|mailto):\\S.*"
+private val ALLOWED_HREF_SCHEMES = Regex("^(https?|mailto):\\S.*")
 
 /**
  * Converts status HTML to an [AnnotatedString] with every disallowed
@@ -129,7 +129,7 @@ fun sanitizeHtmlToAnnotatedString(
                     name == "a" -> {
                         val href = node.attr("href").trim()
                         val abs = node.absUrl("href").ifEmpty { resolveHref(href, baseUrl) ?: "" }
-                        val link = if (abs.matches(Regex(ALLOWED_HREF_SCHEMES))) abs else null
+                        val link = if (abs.matches(ALLOWED_HREF_SCHEMES)) abs else null
                         // Whole anchor text ("#tag", "@user@host") drives in-app routing.
                         val anchorText = node.text()
                         for (child in node.childNodes()) walk(child, style, link, anchorText)

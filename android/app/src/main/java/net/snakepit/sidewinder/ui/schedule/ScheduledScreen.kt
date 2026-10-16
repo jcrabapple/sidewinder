@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.schedule.ScheduledOps
 import net.snakepit.sidewinder.core.schedule.ScheduledRepository
 import net.snakepit.sidewinder.core.schedule.ScheduledStatus
 import java.time.Instant
@@ -139,9 +140,13 @@ fun ScheduledScreen(api: Api, session: Session) {
                         onReschedule = { millis ->
                             scope.launch {
                                 try {
-                                    ScheduledRepository.reschedule(api, session.token, item.id, isoFromMillis(millis))
-                                    load()
-                                    snackbar.showSnackbar("Rescheduled to ${scheduledAtLabel(isoFromMillis(millis))}.")
+                                    val updated = ScheduledRepository.reschedule(api, session.token, item.id, isoFromMillis(millis))
+                                    // Update in place; a full reload would
+                                    // reset scroll and flash the list.
+                                    (state as? ScheduledState.Content)?.let { cur ->
+                                        state = cur.copy(items = ScheduledOps.rescheduled(cur.items, updated))
+                                    }
+                                    snackbar.showSnackbar("Rescheduled to ${scheduledAtLabel(updated.scheduled_at)}.")
                                 } catch (e: ApiError) {
                                     snackbar.showSnackbar("Could not reschedule: the server returned error ${e.status}. Try again.")
                                 } catch (e: CancellationException) {
@@ -155,7 +160,16 @@ fun ScheduledScreen(api: Api, session: Session) {
                             scope.launch {
                                 try {
                                     ScheduledRepository.cancel(api, session.token, item.id)
-                                    load()
+                                    // Update in place; an empty result
+                                    // falls through to the empty state.
+                                    (state as? ScheduledState.Content)?.let { cur ->
+                                        val remaining = ScheduledOps.canceled(cur.items, item.id)
+                                        state = if (remaining.isEmpty()) {
+                                            ScheduledState.Empty
+                                        } else {
+                                            cur.copy(items = remaining)
+                                        }
+                                    }
                                     snackbar.showSnackbar("Scheduled post canceled.")
                                 } catch (e: ApiError) {
                                     snackbar.showSnackbar("Could not cancel: the server returned error ${e.status}. Try again.")

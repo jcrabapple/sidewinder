@@ -44,6 +44,43 @@ class FilterEngineTest {
     // ---- context filtering ----
 
     @Test
+    fun wholeWordMatchesAcrossLengthChangingLowercase() {
+        // `İ`.lowercase() is "i̇" (two chars), so indices taken from a
+        // lowercased haystack point past the original string's boundaries.
+        // Matching must scan the ORIGINAL field with regionMatches.
+        val hit = FilterEngine.match(
+            listOf(filter(keywords = listOf(keyword("test", wholeWord = true)))),
+            text(body = "İ test"),
+            context = "home",
+            nowMs = 0L,
+        )
+        assertEquals("Test filter", hit?.title)
+        assertEquals(listOf("test"), hit?.matchedKeywords)
+    }
+
+    @Test
+    fun wholeWordStillRejectsPartialMatches() {
+        val hit = FilterEngine.match(
+            listOf(filter(keywords = listOf(keyword("test", wholeWord = true)))),
+            text(body = "testing İ"),
+            context = "home",
+            nowMs = 0L,
+        )
+        assertNull(hit)
+    }
+
+    @Test
+    fun plainNonWholeWordMatchSurvivesMultibyteFields() {
+        val hit = FilterEngine.match(
+            listOf(filter(keywords = listOf(keyword("test")))),
+            text(body = "İatest İ test"),
+            context = "home",
+            nowMs = 0L,
+        )
+        assertEquals(listOf("test"), hit?.matchedKeywords)
+    }
+
+    @Test
     fun verdictIgnoresFiltersOutsideContext() {
         val hit = FilterEngine.verdict(
             listOf(FilteredStatus(filter = filter(context = listOf("public")))),

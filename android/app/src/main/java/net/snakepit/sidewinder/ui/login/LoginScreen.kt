@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.datastore.SessionStore
@@ -44,9 +46,12 @@ import net.snakepit.sidewinder.core.oauth.OauthException
 import net.snakepit.sidewinder.core.oauth.SCOPES
 import net.snakepit.sidewinder.core.oauth.authorizeUrl
 import net.snakepit.sidewinder.core.oauth.buildSession
+import net.snakepit.sidewinder.core.oauth.clearPendingLogin
 import net.snakepit.sidewinder.core.oauth.exchangeToken
 import net.snakepit.sidewinder.core.oauth.getOrCreateClient
+import net.snakepit.sidewinder.core.oauth.loadPendingLogin
 import net.snakepit.sidewinder.core.oauth.loginErrorMessage
+import net.snakepit.sidewinder.core.oauth.savePendingLogin
 
 /** The default server suggested on the sign-in screen. Same default as the web app. */
 private const val DEFAULT_BASE = "https://gts.example.org"
@@ -87,10 +92,13 @@ internal object PendingLogin {
  * as active. Throws [OauthException] (or ApiError) when sign-in fails;
  * the caller should surface [loginErrorMessage].
  */
-suspend fun handleOauthRedirect(uri: Uri): Session {
-    val context = PendingLogin.appContext
-        ?: throw OauthException("No sign-in attempt in progress. Start again from the sign-in screen.")
+suspend fun handleOauthRedirect(activityContext: Context, uri: Uri): Session {
+    // The redirect can arrive in a fresh process (killed while the user was
+    // in the browser): PendingLogin is empty then, so the caller supplies the
+    // context and the persisted pending-login file is the fallback.
+    val context = activityContext.applicationContext
     val pending = PendingLogin.request
+        ?: loadPendingLogin(context)
         ?: throw OauthException("No sign-in attempt in progress. Start again from the sign-in screen.")
 
     if (uri.scheme != "sidewinder" || uri.host != "oauth") {
@@ -98,6 +106,7 @@ suspend fun handleOauthRedirect(uri: Uri): Session {
     }
     uri.getQueryParameter("error")?.let { error ->
         val description = uri.getQueryParameter("error_description")
+        clearPendingLogin(context)
         throw OauthException(
             "The server denied sign-in" +
                 (description?.let { ": $it" } ?: ": $error") +
@@ -108,6 +117,7 @@ suspend fun handleOauthRedirect(uri: Uri): Session {
         ?: throw OauthException("The sign-in redirect had no authorization code. Start again from the sign-in screen.")
     if (uri.getQueryParameter("state") != pending.state) {
         PendingLogin.clear()
+        clearPendingLogin(context)
         throw OauthException("Sign-in state mismatch. Start again from the sign-in screen.")
     }
 
@@ -116,9 +126,15 @@ suspend fun handleOauthRedirect(uri: Uri): Session {
         val session = buildSession(pending.base, token, pending.scopes)
         SessionStore(context).add(session)
         PendingLogin.clear()
+        clearPendingLogin(context)
         return session
+    } catch (e: CancellationException) {
+        // The caller was cancelled; keep the pending sign-in so a retry
+        // (or the redirect still in flight) can complete.
+        throw e
     } catch (e: Exception) {
         PendingLogin.clear()
+        clearPendingLogin(context)
         throw e
     }
 }
@@ -135,10 +151,10 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var instanceInput by remember { mutableStateOf(DEFAULT_BASE) }
+    var instanceInput by rememberSaveable { mutableStateOf(DEFAULT_BASE) }
     var phase by remember { mutableStateOf(LoginPhase.Idle) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var adminScopes by remember { mutableStateOf(false) }
+    var adminScopes by rememberSaveable { mutableStateOf(false) }
 
     SideEffect { PendingLogin.appContext = context.applicationContext }
 
@@ -159,11 +175,17 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
                 val credentials = getOrCreateClient(context.applicationContext, base, scopes)
                 val request = authorizeUrl(base, credentials, scopes)
                 PendingLogin.request = request
+                savePendingLogin(context.applicationContext, request)
                 val intent = CustomTabsIntent.Builder().build()
                 intent.launchUrl(context, Uri.parse(request.url))
                 phase = LoginPhase.Waiting
+            } catch (e: CancellationException) {
+                // Cancelled mid sign-in: keep any persisted pending state
+                // (the redirect may still arrive) and stop composing.
+                throw e
             } catch (e: Exception) {
                 PendingLogin.clear()
+                clearPendingLogin(context.applicationContext)
                 phase = LoginPhase.Error
                 errorMessage = loginErrorMessage(e)
             }

@@ -70,6 +70,9 @@ private val visibilityLabels = mapOf(
     "direct" to "Direct",
 )
 
+/** Visibility values a settings file may carry; anything else is invalid. */
+internal val VALID_VISIBILITIES = visibilityLabels.keys
+
 /** Interface text-scale choices; 100% follows the system font size. */
 private val textScaleOptions = listOf(
     0.8f to "80%",
@@ -85,7 +88,7 @@ private fun textScaleLabel(value: Float): String =
 
 /** Portable copy of the app settings for export/import (SAF JSON files). */
 @Serializable
-private data class SettingsBackup(
+internal data class SettingsBackup(
     val theme: String,
     val relativeTimes: Boolean,
     val defaultVisibility: String,
@@ -100,11 +103,13 @@ private data class SettingsBackup(
     val dynamicColor: Boolean,
     val textScale: Float,
     val reduceMotion: Boolean,
+    /** Default true so files exported before live streaming existed keep it on. */
+    val liveStreaming: Boolean = true,
 ) {
     fun toSettings(): AppSettings = AppSettings(
         theme = runCatching { ThemePref.valueOf(theme) }.getOrDefault(ThemePref.SYSTEM),
         relativeTimes = relativeTimes,
-        defaultVisibility = defaultVisibility,
+        defaultVisibility = if (defaultVisibility in VALID_VISIBILITIES) defaultVisibility else "public",
         requireAltText = requireAltText,
         backgroundNotifications = backgroundNotifications,
         hideEngagementCounts = hideEngagementCounts,
@@ -116,6 +121,7 @@ private data class SettingsBackup(
         dynamicColor = dynamicColor,
         textScale = textScale.coerceIn(0.8f, 1.3f),
         reduceMotion = reduceMotion,
+        liveStreaming = liveStreaming,
     )
 
     companion object {
@@ -134,6 +140,7 @@ private data class SettingsBackup(
             dynamicColor = s.dynamicColor,
             textScale = s.textScale,
             reduceMotion = s.reduceMotion,
+            liveStreaming = s.liveStreaming,
         )
     }
 }
@@ -695,7 +702,9 @@ private fun ToggleRow(
                 role = Role.Switch,
                 onValueChange = onCheckedChange,
             )
-            .semantics { this.contentDescription = "$label, ${if (checked) "on" else "off"}" }
+            // Role.Switch on the toggleable row supplies the on/off state;
+            // repeating it here makes screen readers announce state twice.
+            .semantics { this.contentDescription = label }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -93,12 +93,8 @@ private sealed interface SearchState {
     data object Content : SearchState
 }
 
-/** Statuses tab payload: accumulated items plus the next offset, if any. */
-private data class StatusResults(
-    val items: List<Status>,
-    val nextOffset: Int?,
-    val loadingMore: Boolean = false,
-)
+// StatusResults now lives in SearchMerge.kt (internal) so the pure
+// helpers and their tests share one definition.
 
 private data class AccountResults(val items: List<Account>)
 private data class HashtagResults(val items: List<SearchHashtag>)
@@ -157,7 +153,7 @@ fun SearchScreen(
                     val results = SearchRepository.search(api, q, type = "statuses")
                     if (!isCurrent()) return@launch
                     statusResults = StatusResults(
-                        items = results.statuses,
+                        items = SearchMerge.deduped(results.statuses),
                         nextOffset = if (results.statuses.size < SearchRepository.PAGE_LIMIT) null else SearchRepository.PAGE_LIMIT,
                     )
                     statusQuery = q
@@ -178,7 +174,7 @@ fun SearchScreen(
                 try {
                     val results = SearchRepository.search(api, q, type = "accounts")
                     if (!isCurrent()) return@launch
-                    accountResults = AccountResults(results.accounts)
+                    accountResults = AccountResults(results.accounts.distinctBy { it.id })
                     accountQuery = q
                     accountState = if (results.accounts.isEmpty()) SearchState.Empty else SearchState.Content
                 } catch (e: ApiError) {
@@ -197,7 +193,7 @@ fun SearchScreen(
                 try {
                     val results = SearchRepository.search(api, q, type = "hashtags")
                     if (!isCurrent()) return@launch
-                    hashtagResults = HashtagResults(results.hashtags)
+                    hashtagResults = HashtagResults(results.hashtags.distinctBy { it.name })
                     hashtagQuery = q
                     hashtagState = if (results.hashtags.isEmpty()) SearchState.Empty else SearchState.Content
                 } catch (e: ApiError) {
@@ -260,24 +256,24 @@ fun SearchScreen(
                     try {
                         val results = SearchRepository.search(api, q, type = "statuses", offset = nextOffset)
                         if (query.trim() != q) return@launch
-                        val base = statusResults?.items ?: return@launch
-                        val baseIds = base.mapTo(HashSet()) { it.id }
-                        val fresh = results.statuses.filterNot { it.id in baseIds }
+                        val live = statusResults ?: return@launch
                         statusResults = StatusResults(
-                            items = base + fresh,
+                            items = SearchMerge.append(live.items, results.statuses),
                             nextOffset = if (results.statuses.size < SearchRepository.PAGE_LIMIT) null else nextOffset + SearchRepository.PAGE_LIMIT,
                             loadingMore = false,
                         )
                     } catch (e: ApiError) {
                         if (query.trim() == q) {
-                            statusResults = current
+                            // K46: keep the LIVE state (concurrent favourites
+                            // survive), only clear the in-flight flag.
+                            statusResults = SearchMerge.failureState(current, statusResults)
                             showNotice("Could not load more posts: the server returned error ${e.status}. Scroll to try again.")
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         if (query.trim() == q) {
-                            statusResults = current
+                            statusResults = SearchMerge.failureState(current, statusResults)
                             showNotice("Could not load more posts: ${e.message ?: "network error"}. Scroll to try again.")
                         }
                     }
@@ -477,9 +473,11 @@ private fun AccountRow(account: Account, onOpenProfile: (String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clickable { onOpenProfile(account.id) }
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .semantics { contentDescription = "Open profile for $name, @${account.acct}" },
+            // K47: label the click itself; no extra semantics node.
+            .clickable(
+                onClickLabel = "Open profile for $name, @${account.acct}",
+            ) { onOpenProfile(account.id) }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         AsyncImage(
             model = account.avatar_static ?: account.avatar,
@@ -515,9 +513,11 @@ private fun HashtagRow(hashtag: SearchHashtag, onOpenTag: (String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clickable { onOpenTag(hashtag.name) }
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .semantics { contentDescription = "Open hashtag ${hashtag.name}, $detail" },
+            // K47: label the click itself; no extra semantics node.
+            .clickable(
+                onClickLabel = "Open hashtag ${hashtag.name}, $detail",
+            ) { onOpenTag(hashtag.name) }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Icon(
             imageVector = Icons.Outlined.Tag,

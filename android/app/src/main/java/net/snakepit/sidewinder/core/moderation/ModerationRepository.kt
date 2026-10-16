@@ -118,20 +118,49 @@ object ModerationRepository {
      * the old query was the reason Signups never loaded). GTS rows can be
      * internal/instance accounts, so filter to real local, unapproved,
      * unconfirmed signups.
+     *
+     * The endpoint returns a default-size page, so pages are followed
+     * until exhausted (capped at [MAX_FILTER_PAGES]) BEFORE filtering —
+     * filtering a single page can strand pending signups on later pages.
      */
     suspend fun fetchPendingSignups(api: Api, base: String): List<AdminAccount> {
-        val list = api.page(
-            path = "/api/v1/admin/accounts",
-            serializer = ListSerializer(AdminAccount.serializer()),
-            query = mapOf("pending" to listOf("true")),
-        )
+        var items = emptyList<AdminAccount>()
+        var maxId: String? = null
+        var pages = 0
+        do {
+            val page = api.page(
+                path = "/api/v1/admin/accounts",
+                serializer = ListSerializer(AdminAccount.serializer()),
+                query = mapOf("pending" to listOf("true")),
+                maxId = maxId,
+            )
+            items = items + page.items
+            pages++
+            maxId = pageBudget(pages, page.nextMaxId)
+        } while (maxId != null)
         val host = runCatching { java.net.URI(base.trim()).host?.lowercase().orEmpty() }
             .getOrDefault("")
-        return list.items.filter {
-            it.domain == null && !it.approved && !it.confirmed &&
-                !it.username.equals(host, ignoreCase = true)
-        }
+        return items.filter { isPendingSignup(it, host) }
     }
+
+    /**
+     * The pending-signup page budget: keep following [nextMaxId] until the
+     * page cap is hit. Pure so the cap behavior is unit-testable.
+     */
+    internal fun pageBudget(pagesFetched: Int, nextMaxId: String?, cap: Int = MAX_FILTER_PAGES): String? =
+        if (pagesFetched < cap) nextMaxId else null
+
+    /** Domain blocks and pending signups both follow at most this many pages. */
+    internal const val MAX_FILTER_PAGES = 10
+
+    /**
+     * A real pending signup: hosted on this server, not yet approved,
+     * not yet email-confirmed, and not one of GTS's internal/instance
+     * accounts (those carry the instance host as their username).
+     */
+    internal fun isPendingSignup(a: AdminAccount, host: String): Boolean =
+        a.domain == null && !a.approved && !a.confirmed &&
+            !a.username.equals(host, ignoreCase = true)
 
     /**
      * Approve a pending signup. GTS has no email-confirm API: after this
@@ -192,6 +221,36 @@ object ModerationRepository {
     // ---- Accounts ----
 
     /**
+     * Error copy for "Suspend and resolve" when the suspend landed but the
+     * resolve did not: the message must say BOTH things and the retry must
+     * only re-run the resolve. Null when the suspend did not happen (the
+     * plain resolve error applies).
+     */
+    internal fun suspendResolveNotice(targetAcct: String, suspendSucceeded: Boolean, resolveError: String): String? =
+        if (suspendSucceeded) {
+            "@$targetAcct was suspended, but the report could not be resolved: $resolveError. " +
+                "Retrying resolves the report only; the suspend stays in place."
+        } else {
+            null
+        }
+
+    /**
+     * List update after a suspend succeeds: in the suspended filter the
+     * card stays and is marked suspended; in every other filter it comes
+     * off the list. Pure for unit tests.
+     */
+    internal fun updateSuspendedList(
+        items: List<AdminAccount>,
+        suspended: AdminAccount,
+        keepSuspended: Boolean,
+    ): List<AdminAccount> =
+        if (keepSuspended) {
+            items.map { if (it.id == suspended.id) suspended else it }
+        } else {
+            items.filterNot { it.id == suspended.id }
+        }
+
+    /**
      * Suspend an account. GTS supports `type=suspend` only on this endpoint,
      * and there is no API to undo a suspend — that takes the server CLI,
      * which the confirm dialog must state before anyone taps through.
@@ -210,27 +269,36 @@ object ModerationRepository {
 
     /**
      * Admin account search: by username substring, optionally narrowed to
-     * remote or suspended accounts.
+     * local, remote, or suspended accounts. GTS v1 admin account filters
+     * use `local=true` / `remote=true` (mirrors the other v1 params here).
      */
     suspend fun searchAdminAccounts(
         api: Api,
         username: String? = null,
+        local: Boolean = false,
         remote: Boolean = false,
         suspended: Boolean = false,
         maxId: String? = null,
-    ): Page<AdminAccount> {
-        val query = buildMap {
-            username?.trim()?.takeIf { it.isNotEmpty() }?.let { put("username", listOf(it)) }
-            if (remote) put("remote", listOf("true"))
-            if (suspended) put("suspended", listOf("true"))
-            put("limit", listOf("40"))
-        }
-        return api.page(
+    ): Page<AdminAccount> =
+        api.page(
             path = "/api/v1/admin/accounts",
             serializer = ListSerializer(AdminAccount.serializer()),
-            query = query,
+            query = searchAdminQuery(username, local, remote, suspended),
             maxId = maxId,
         )
+
+    /** Query map for [searchAdminAccounts], split out so the param mapping is unit-testable. */
+    internal fun searchAdminQuery(
+        username: String? = null,
+        local: Boolean = false,
+        remote: Boolean = false,
+        suspended: Boolean = false,
+    ): Map<String, List<String>> = buildMap {
+        username?.trim()?.takeIf { it.isNotEmpty() }?.let { put("username", listOf(it)) }
+        if (local) put("local", listOf("true"))
+        if (remote) put("remote", listOf("true"))
+        if (suspended) put("suspended", listOf("true"))
+        put("limit", listOf("40"))
     }
 
     // ---- Domain blocks ----
@@ -242,6 +310,33 @@ object ModerationRepository {
             query = mapOf("limit" to listOf("100")),
             maxId = maxId,
         )
+
+    /**
+     * The whole blocklist, not just the first 100-row page: follows the
+     * Link-header cursor until exhausted, capped at [MAX_FILTER_PAGES]
+     * pages, deduped by id. The old screen showed only page one.
+     */
+    suspend fun fetchAllDomainBlocks(api: Api): List<AdminDomainBlock> {
+        var items = emptyList<AdminDomainBlock>()
+        var maxId: String? = null
+        var pages = 0
+        do {
+            val page = fetchDomainBlocks(api, maxId)
+            items = mergeDomainBlocks(items, page.items)
+            pages++
+            maxId = pageBudget(pages, page.nextMaxId)
+        } while (maxId != null)
+        return items
+    }
+
+    /** Append the next page's rows, dropping ids already present. Pure for unit tests. */
+    internal fun mergeDomainBlocks(
+        existing: List<AdminDomainBlock>,
+        page: List<AdminDomainBlock>,
+    ): List<AdminDomainBlock> {
+        val seen = existing.mapTo(HashSet()) { it.id }
+        return existing + page.filterNot { it.id in seen }
+    }
 
     suspend fun createDomainBlock(
         api: Api,

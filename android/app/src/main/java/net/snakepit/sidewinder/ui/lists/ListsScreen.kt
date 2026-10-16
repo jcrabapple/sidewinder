@@ -15,14 +15,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -40,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -291,7 +294,7 @@ private fun ListRow(
             .fillMaxWidth()
             .clickable(onClick = onOpen)
             .padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics {
+            .semantics(mergeDescendants = true) {
                 contentDescription = "List ${record.title}, ${repliesPolicyLabel(record.replies_policy)}. Opens list members."
             },
     ) {
@@ -341,17 +344,18 @@ private fun repliesPolicyLabel(apiValue: String): String =
  * with "Members of this list" as the default. Saves on the confirm
  * button; validation keeps the title non-blank.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ListEditDialog(
     existing: ListRecord?,
     onDismiss: () -> Unit,
     onSave: (title: String, policy: RepliesPolicy) -> Unit,
 ) {
-    var title by remember(existing) { mutableStateOf(existing?.title.orEmpty()) }
-    var policy by remember(existing) {
+    var title by rememberSaveable(existing) { mutableStateOf(existing?.title.orEmpty()) }
+    var policy by rememberSaveable(existing) {
         mutableStateOf(existing?.let { RepliesPolicy.fromApi(it.replies_policy) } ?: RepliesPolicy.List)
     }
-    var policyOpen by remember { mutableStateOf(false) }
+    var policyOpen by rememberSaveable { mutableStateOf(false) }
     val valid = title.isNotBlank()
 
     AlertDialog(
@@ -374,7 +378,10 @@ private fun ListEditDialog(
                         .fillMaxWidth()
                         .semantics { contentDescription = "List title" },
                 )
-                Box {
+                ExposedDropdownMenuBox(
+                    expanded = policyOpen,
+                    onExpandedChange = { policyOpen = it },
+                ) {
                     OutlinedTextField(
                         value = policy.label,
                         onValueChange = {},
@@ -382,20 +389,14 @@ private fun ListEditDialog(
                         singleLine = true,
                         label = { Text("Show replies from") },
                         trailingIcon = {
-                            IconButton(
-                                onClick = { policyOpen = true },
-                                modifier = Modifier.semantics {
-                                    contentDescription = "Choose replies policy, current ${policy.label}"
-                                },
-                            ) {
-                                Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-                            }
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = policyOpen)
                         },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                             .semantics { contentDescription = "Replies policy, ${policy.label}" },
                     )
-                    DropdownMenu(
+                    ExposedDropdownMenu(
                         expanded = policyOpen,
                         onDismissRequest = { policyOpen = false },
                     ) {

@@ -45,7 +45,7 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.requests.FollowRequestsRepository
-import org.jsoup.Jsoup
+import net.snakepit.sidewinder.core.text.StatusText
 
 private sealed interface RequestsState {
     /** First page still loading. */
@@ -275,7 +275,9 @@ private fun RequestRow(
     onReject: () -> Unit,
 ) {
     val name = account.display_name?.takeIf { it.isNotBlank() } ?: "@${account.acct}"
-    val note = noteExcerpt(account.note)
+    // K42: parse once per note through the shared cached extractor,
+    // not per recomposition.
+    val note = remember(account.note) { noteExcerpt(account.note) }
     val rowDescription = buildString {
         append("Follow request from $name, @${account.acct}")
         if (note.isNotEmpty()) append(". $note")
@@ -285,7 +287,9 @@ private fun RequestRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp)
-            .semantics { contentDescription = rowDescription },
+            // K43: one merged node describing the whole request row, so
+            // screen readers get a single announcement instead of one per child.
+            .semantics(mergeDescendants = true) { contentDescription = rowDescription },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -347,5 +351,4 @@ private fun RequestRow(
 }
 
 /** Plain-text note excerpt: tags stripped, entities decoded, collapsed. */
-private fun noteExcerpt(html: String): String =
-    Jsoup.parse(html).text().replace(Regex("\\s+"), " ").trim()
+private fun noteExcerpt(html: String): String = StatusText.plain(html)

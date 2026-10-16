@@ -119,10 +119,30 @@ object FilterCache {
 
     private const val TTL_MS = 60_000L
 
-    private class Entry(val filters: List<FilterV2>, val fetchedAtMs: Long)
+    internal class Entry(val filters: List<FilterV2>, val fetchedAtMs: Long)
+
+    /** After a failed fetch, wait this long before trying the network again. */
+    internal const val RETRY_AFTER_FAILURE_MS = 15_000L
+
+    /**
+     * The entry to store after a failed fetch: last known filters (empty when
+     * never fetched), timestamped so it goes stale [RETRY_AFTER_FAILURE_MS]
+     * from [now].
+     */
+    internal fun failureEntry(previous: Entry?, now: Long): Entry =
+        Entry(previous?.filters ?: emptyList(), now - TTL_MS + RETRY_AFTER_FAILURE_MS)
+
+    /** True when [entry] is fresh enough to serve without a fetch at [now]. */
+    internal fun isFresh(entry: Entry, now: Long): Boolean = now - entry.fetchedAtMs < TTL_MS
 
     private val mutex = Mutex()
-    private val cache = HashMap<String, Entry>()
+
+    /**
+     * Internal so tests can seed entries: peek() reads this map directly.
+     * Concurrent access is safe (ConcurrentHashMap); racing a refresh only
+     * costs one extra re-fetch and never corrupts an entry.
+     */
+    internal val cache = java.util.concurrent.ConcurrentHashMap<String, Entry>()
 
     /**
      * Cached filters for [token], refreshed when missing, stale after
@@ -133,14 +153,31 @@ object FilterCache {
         mutex.withLock {
             val now = System.currentTimeMillis()
             val entry = cache[token]
-            if (!force && entry != null && now - entry.fetchedAtMs < TTL_MS) {
+            if (!force && entry != null && isFresh(entry, now)) {
                 return entry.filters
             }
-            val fresh = FiltersRepository.list(api, token)
+            val fresh = try {
+                FiltersRepository.list(api, token)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Negative cache: keep the last known filters (none if never
+                // fetched) and retry after RETRY_AFTER_FAILURE_MS, so one outage
+                // does not make every card re-fetch serially behind the mutex.
+                cache[token] = failureEntry(entry, now)
+                throw e
+            }
             cache[token] = Entry(fresh, now)
             return fresh
         }
     }
+
+    /**
+     * The cached filters for [token], even when stale — or null when they
+     * have never been fetched. Non-suspending so synchronous render paths
+     * (the initial filter verdict) can use it without a coroutine.
+     */
+    fun peek(token: String): List<FilterV2>? = cache[token]?.filters
 
     /** Drop the cached filters for [token]; called after every mutation. */
     fun invalidate(token: String) {

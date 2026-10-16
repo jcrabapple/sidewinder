@@ -168,7 +168,7 @@ fun ThreadScreen(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("Delete this post?") },
-            text = { Text("This permanently removes the post and its replies from your account. This cannot be undone.") },
+            text = { Text("This permanently removes your post. Replies from other people are not removed.") },
             confirmButton = {
                 TextButton(
                     onClick = {

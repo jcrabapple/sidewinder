@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +33,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -38,6 +42,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.SnackbarHost
@@ -68,6 +73,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -240,9 +246,15 @@ private fun AppRoot(activity: MainActivity) {
     LaunchedEffect(session?.id, sessionLoaded) {
         val s = session ?: return@LaunchedEffect
         if (!sessionLoaded) return@LaunchedEffect
-        unreadCount = runCatching {
-            UnreadStore.recount(Api(s.base, s.token), s.id, unreadStore)
-        }.getOrDefault(unreadStore.count(s.id))
+        try {
+            unreadCount = UnreadStore.recount(Api(s.base, s.token), s.id, unreadStore)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Fall back to the cached badge count; the recount retries on
+            // the next account change or app open.
+            unreadCount = unreadStore.count(s.id)
+        }
     }
 
     // Keep background polling in step with the setting and the session,
@@ -270,7 +282,7 @@ private fun AppRoot(activity: MainActivity) {
     LaunchedEffect(redirect) {
         val uri = redirect ?: return@LaunchedEffect
         try {
-            handleOauthRedirect(uri)
+            handleOauthRedirect(activity, uri)
             session = store.active()
             sessions = store.list()
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
@@ -322,23 +334,25 @@ private fun AppRoot(activity: MainActivity) {
                         onLoggedIn = { /* redirect path updates session above */ },
                         onCancel = null,
                     )
-                    else -> AppTabs(
-                        activity = activity,
-                        session = active,
-                        sessions = sessions,
-                        store = store,
-                        settingsStore = settingsStore,
-                        unreadStore = unreadStore,
-                        unreadCount = unreadCount,
-                        onUnreadChanged = { unreadCount = it },
-                        onSessionsChanged = {
-                            sessions = store.list()
-                            session = store.active()
-                            // Signed-out accounts' cached timelines go with them.
-                            TimelineStore.retainSessions(sessions.mapTo(HashSet()) { it.id })
-                        },
-                        onSettingsChanged = { settings = settingsStore.settings() },
-                    )
+                    else -> key(active.id) {
+                        AppTabs(
+                            activity = activity,
+                            session = active,
+                            sessions = sessions,
+                            store = store,
+                            settingsStore = settingsStore,
+                            unreadStore = unreadStore,
+                            unreadCount = unreadCount,
+                            onUnreadChanged = { unreadCount = it },
+                            onSessionsChanged = {
+                                sessions = store.list()
+                                session = store.active()
+                                // Signed-out accounts' cached timelines go with them.
+                                TimelineStore.retainSessions(sessions.mapTo(HashSet()) { it.id })
+                            },
+                            onSettingsChanged = { settings = settingsStore.settings() },
+                        )
+                    }
                 }
             }
         }
@@ -600,15 +614,18 @@ private fun AppTabs(
                                     navigateTopLevel(item.route)
                                 }
                             },
+                            // The unread count is announced once, in the item's
+                            // merged semantics; a contentDescription on the icon
+                            // would repeat the label ("Notifications, Notifications").
+                            modifier = Modifier.semantics {
+                                if (badgeCount > 0) stateDescription = "$badgeLabel unread"
+                            },
                             icon = {
                                 if (badgeCount > 0) {
                                     BadgedBox(
                                         badge = { Badge { Text(badgeLabel) } },
                                     ) {
-                                        Icon(
-                                            item.icon,
-                                            contentDescription = "${item.label}, $badgeLabel unread",
-                                        )
+                                        Icon(item.icon, contentDescription = null)
                                     }
                                 } else {
                                     Icon(item.icon, contentDescription = item.label)
@@ -726,8 +743,11 @@ private fun AppTabs(
                 }
                 var parent by remember(replyToId) { mutableStateOf<Status?>(null) }
                 var parentFailed by remember(replyToId) { mutableStateOf(false) }
-                LaunchedEffect(replyToId) {
+                // Re-run the fetch on Retry; the id alone would not re-fire.
+                var parentRetry by remember(replyToId) { mutableIntStateOf(0) }
+                LaunchedEffect(replyToId, parentRetry) {
                     if (replyToId != null) {
+                        parentFailed = false
                         parent = try {
                             ThreadRepository.status(api, replyToId)
                         } catch (e: CancellationException) {
@@ -742,8 +762,10 @@ private fun AppTabs(
                 var editTarget by remember(editId) { mutableStateOf<Status?>(null) }
                 var editSource by remember(editId) { mutableStateOf<String?>(null) }
                 var editFailed by remember(editId) { mutableStateOf(false) }
-                LaunchedEffect(editId) {
+                var editRetry by remember(editId) { mutableIntStateOf(0) }
+                LaunchedEffect(editId, editRetry) {
                     if (editId == null) return@LaunchedEffect
+                    editFailed = false
                     try {
                         val target = ThreadRepository.status(api, editId)
                         // Prefer the server's stored source; fall back to the
@@ -764,7 +786,14 @@ private fun AppTabs(
                 }
                 when {
                     editId != null -> when {
-                        editFailed -> PlaceholderScreen("Could not load the post to edit. Go back and try again.")
+                        editFailed -> LoadFailedScreen(
+                            message = "Could not load the post to edit. Check your connection, then retry.",
+                            onBack = { nav.popBackStack() },
+                            onRetry = {
+                                editFailed = false
+                                editRetry++
+                            },
+                        )
                         editTarget == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
                         }
@@ -790,8 +819,13 @@ private fun AppTabs(
                     // Gate the composer on the parent fetch: composing with
                     // replyTo = null first would render a new-post composer
                     // (wrong draft, wrong visibility default) for a reply.
-                    parentFailed -> PlaceholderScreen(
-                        "Could not load the post you are replying to. Go back and try again.",
+                    parentFailed -> LoadFailedScreen(
+                        message = "Could not load the post you are replying to. Check your connection, then retry.",
+                        onBack = { nav.popBackStack() },
+                        onRetry = {
+                            parentFailed = false
+                            parentRetry++
+                        },
                     )
                     parent == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -992,6 +1026,12 @@ private fun subScreenTitle(route: String?, args: Bundle?): String? = when (route
     "bookmarks" -> "Bookmarks"
     "favourites" -> "Favourites"
     "tag/{name}" -> "#" + (args?.getString("name") ?: "")
+    "lists" -> "Lists"
+    "list_members/{id}/{title}" -> args?.getString("title")?.takeIf { it.isNotBlank() } ?: "List members"
+    "list_tl/{id}/{title}" -> args?.getString("title")?.takeIf { it.isNotBlank() } ?: "List"
+    "catchup" -> "Catch up"
+    "insights" -> "Insights"
+    "moderation" -> "Moderation"
     else -> null
 }
 
@@ -1007,5 +1047,40 @@ private fun PlaceholderScreen(body: String) {
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+/** A failed pre-composer load: explain, then offer Back and Retry. */
+@Composable
+private fun LoadFailedScreen(message: String, onBack: () -> Unit, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = onBack,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Go back" },
+            ) {
+                Text("Back")
+            }
+            OutlinedButton(
+                onClick = onRetry,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Retry loading the post" },
+            ) {
+                Text("Retry")
+            }
+        }
     }
 }

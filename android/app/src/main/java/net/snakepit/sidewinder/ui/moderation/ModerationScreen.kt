@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -95,7 +96,7 @@ fun ModerationScreen(
     api: Api,
     session: Session,
 ) {
-    var tab by remember { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(0) }
 
     Scaffold(contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -343,9 +344,10 @@ private fun SignupCard(
 
 @Composable
 private fun ReportsTab(api: Api) {
-    var resolved by remember { mutableStateOf(false) }
+    var resolved by rememberSaveable { mutableStateOf(false) }
     var state by remember { mutableStateOf<LoadState<AdminReport>>(LoadState.Loading) }
     var loadingMore by remember { mutableStateOf(false) }
+    var moreError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -369,6 +371,7 @@ private fun ReportsTab(api: Api) {
         val maxId = current.nextMaxId ?: return
         if (loadingMore) return
         loadingMore = true
+        moreError = false
         scope.launch {
             try {
                 val page = ModerationRepository.fetchReports(api, resolved, maxId)
@@ -378,7 +381,8 @@ private fun ReportsTab(api: Api) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Keep the list; the next scroll attempt retries the page.
+                // Keep the list; the footer offers an explicit retry.
+                moreError = true
             } finally {
                 loadingMore = false
             }
@@ -444,6 +448,15 @@ private fun ReportsTab(api: Api) {
                     )
                     if (index < s.items.lastIndex) HorizontalDivider()
                 }
+                if (s.nextMaxId != null) {
+                    item(key = "load-more") {
+                        LoadMoreFooter(
+                            loading = loadingMore,
+                            failed = moreError,
+                            onRetry = ::loadMore,
+                        )
+                    }
+                }
             }
         }
     }
@@ -455,9 +468,10 @@ private fun ReportCard(
     report: AdminReport,
     onUpdated: (AdminReport) -> Unit,
 ) {
-    var comment by remember { mutableStateOf("") }
+    var comment by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var confirmSuspend by remember { mutableStateOf(false) }
+    var suspendDone by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val reporter = report.account
@@ -468,9 +482,14 @@ private fun ReportCard(
         busy = true
         error = null
         scope.launch {
+            // A previous attempt's suspend already landed; retry runs the
+            // resolve only, never a second suspend.
+            var suspended = suspendDone
             try {
-                if (withSuspend) {
+                if (withSuspend && !suspendDone) {
                     ModerationRepository.suspendAccount(api, target.id, "Report ${report.id}")
+                    suspended = true
+                    suspendDone = true
                 }
                 ModerationRepository.resolveReport(api, report.id, comment)
                 onUpdated(
@@ -479,12 +498,14 @@ private fun ReportCard(
                         action_taken_comment = comment.trim().ifEmpty { null },
                     ),
                 )
-            } catch (e: ApiError) {
-                error = "Could not resolve the report: the server returned error ${e.status}. Try again."
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: ApiError) {
+                error = ModerationRepository.suspendResolveNotice(target.acct, suspended, "the server returned error ${e.status}.")
+                    ?: "Could not resolve the report: the server returned error ${e.status}. Try again."
             } catch (e: Exception) {
-                error = "Could not resolve the report: ${e.message ?: "network error"}. Check your connection and try again."
+                error = ModerationRepository.suspendResolveNotice(target.acct, suspended, "${e.message ?: "network error"}.")
+                    ?: "Could not resolve the report: ${e.message ?: "network error"}. Check your connection and try again."
             } finally {
                 busy = false
             }
@@ -551,6 +572,14 @@ private fun ReportCard(
                 supportingText = { Text("Visible to the reporter") },
                 singleLine = true,
             )
+            if (suspendDone) {
+                Text(
+                    text = "Suspended @${target.acct}. The report still needs resolving; retrying will not suspend again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
                 OutlinedButton(
                     onClick = { resolve(withSuspend = false) },
@@ -561,14 +590,16 @@ private fun ReportCard(
                 ) {
                     Text(if (busy) "Resolving" else "Resolve")
                 }
-                OutlinedButton(
-                    onClick = { confirmSuspend = true },
-                    enabled = !busy,
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .semantics { contentDescription = "Suspend @${target.acct} and resolve the report" },
-                ) {
-                    Text("Suspend and resolve", color = MaterialTheme.colorScheme.error)
+                if (!suspendDone) {
+                    OutlinedButton(
+                        onClick = { confirmSuspend = true },
+                        enabled = !busy,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = "Suspend @${target.acct} and resolve the report" },
+                    ) {
+                        Text("Suspend and resolve", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
             Text(
@@ -629,11 +660,12 @@ private fun ReportCard(
 
 @Composable
 private fun AccountsTab(api: Api) {
-    var query by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf("all") } // all / local / remote / suspended
+    var query by rememberSaveable { mutableStateOf("") }
+    var mode by rememberSaveable { mutableStateOf("all") } // all / local / remote / suspended
     var state by remember { mutableStateOf<LoadState<AdminAccount>>(LoadState.Loading) }
     var searchId by remember { mutableStateOf(0) }
     var loadingMore by remember { mutableStateOf(false) }
+    var moreError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -643,6 +675,7 @@ private fun AccountsTab(api: Api) {
             val page = ModerationRepository.searchAdminAccounts(
                 api = api,
                 username = q.trim().ifEmpty { null },
+                local = m == "local",
                 remote = m == "remote",
                 suspended = m == "suspended",
             )
@@ -661,11 +694,13 @@ private fun AccountsTab(api: Api) {
         val maxId = current.nextMaxId ?: return
         if (loadingMore) return
         loadingMore = true
+        moreError = false
         scope.launch {
             try {
                 val page = ModerationRepository.searchAdminAccounts(
                     api = api,
                     username = query.trim().ifEmpty { null },
+                    local = mode == "local",
                     remote = mode == "remote",
                     suspended = mode == "suspended",
                     maxId = maxId,
@@ -676,11 +711,20 @@ private fun AccountsTab(api: Api) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Keep the list; the next scroll attempt retries the page.
+                // Keep the list; the footer offers an explicit retry.
+                moreError = true
             } finally {
                 loadingMore = false
             }
         }
+    }
+
+    // A suspend lands: outside the suspended filter the card leaves the
+    // list; inside it the card stays, marked suspended.
+    fun onSuspended(updated: AdminAccount) {
+        val current = state as? LoadState.Content<AdminAccount> ?: return
+        val next = ModerationRepository.updateSuspendedList(current.items, updated, keepSuspended = mode == "suspended")
+        state = if (next.isEmpty()) LoadState.Empty else current.copy(items = next)
     }
 
     LaunchedEffect(api, searchId) { run(query, mode) }
@@ -748,8 +792,17 @@ private fun AccountsTab(api: Api) {
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             ) {
                 items(count = s.items.size, key = { s.items[it].id }) { index ->
-                    AdminAccountCard(api = api, account = s.items[index])
+                    AdminAccountCard(api = api, account = s.items[index], onSuspended = ::onSuspended)
                     if (index < s.items.lastIndex) HorizontalDivider()
+                }
+                if (s.nextMaxId != null) {
+                    item(key = "load-more") {
+                        LoadMoreFooter(
+                            loading = loadingMore,
+                            failed = moreError,
+                            onRetry = ::loadMore,
+                        )
+                    }
                 }
             }
         }
@@ -757,15 +810,17 @@ private fun AccountsTab(api: Api) {
 }
 
 @Composable
-private fun AdminAccountCard(api: Api, account: AdminAccount) {
-    var reason by remember { mutableStateOf("") }
+private fun AdminAccountCard(api: Api, account: AdminAccount, onSuspended: (AdminAccount) -> Unit) {
+    var reason by rememberSaveable { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var confirmSuspend by remember { mutableStateOf(false) }
+    var suspendDone by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val name = account.displayName
     val acct = account.acct
     val isRemote = account.domain != null
+    val isSuspended = suspendDone || account.suspended
 
     fun doSuspend() {
         if (busy) return
@@ -774,6 +829,8 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
         scope.launch {
             try {
                 ModerationRepository.suspendAccount(api, account.id, reason)
+                suspendDone = true
+                onSuspended(account.copy(suspended = true))
             } catch (e: ApiError) {
                 error = "Could not suspend @$acct: the server returned error ${e.status}. Try again."
             } catch (e: CancellationException) {
@@ -815,11 +872,19 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
             supportingText = { Text("Recorded with the action") },
             singleLine = true,
         )
+        if (isSuspended) {
+            Text(
+                text = "Suspended @$acct. Lifting the suspend takes the server CLI.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
         // Full-width action row: the old trailing "Suspended"-labeled button
         // overflowed narrow cards; the button names its action and spans.
         Button(
             onClick = { confirmSuspend = true },
-            enabled = !busy,
+            enabled = !busy && !isSuspended,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -830,7 +895,13 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
                 .heightIn(min = 48.dp)
                 .semantics { contentDescription = "Suspend @$acct" },
         ) {
-            Text(if (busy) "Suspending\u2026" else "Suspend")
+            Text(
+                when {
+                    busy -> "Suspending\u2026"
+                    isSuspended -> "Suspended"
+                    else -> "Suspend"
+                },
+            )
         }
         error?.let {
             Text(
@@ -885,8 +956,8 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
 @Composable
 private fun DomainsTab(api: Api) {
     var state by remember { mutableStateOf<LoadState<AdminDomainBlock>>(LoadState.Loading) }
-    var domain by remember { mutableStateOf("") }
-    var publicComment by remember { mutableStateOf("") }
+    var domain by rememberSaveable { mutableStateOf("") }
+    var publicComment by rememberSaveable { mutableStateOf("") }
     var obfuscate by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<AdminDomainBlock?>(null) }
@@ -896,8 +967,9 @@ private fun DomainsTab(api: Api) {
     suspend fun load() {
         state = LoadState.Loading
         state = try {
-            val page = ModerationRepository.fetchDomainBlocks(api)
-            if (page.items.isEmpty()) LoadState.Empty else LoadState.Content(page.items, page.nextMaxId)
+            // Follow every page so blocks past the first 100 are reachable.
+            val items = ModerationRepository.fetchAllDomainBlocks(api)
+            if (items.isEmpty()) LoadState.Empty else LoadState.Content(items, nextMaxId = null)
         } catch (e: ApiError) {
             LoadState.Error("Domain blocks could not be loaded: the server returned error ${e.status}. Check your connection, then retry.")
         } catch (e: CancellationException) {
@@ -1174,10 +1246,48 @@ private fun <T> FilterChipRow(
                 selected = isSelected,
                 onClick = { onSelect(value) },
                 label = { Text(label) },
+                // FilterChip announces its own selected state; a manual
+                // ", selected" in the description made screen readers say it twice.
                 modifier = Modifier
                     .heightIn(min = 48.dp)
-                    .semantics { contentDescription = "$label filter${if (isSelected) ", selected" else ""}" },
+                    .semantics { contentDescription = label },
             )
+        }
+    }
+}
+
+/**
+ * Footer for a paged list: a spinner while the next page is in flight,
+ * and on failure a message with an explicit retry button instead of a
+ * silent swallow.
+ */
+@Composable
+private fun LoadMoreFooter(
+    loading: Boolean,
+    failed: Boolean,
+    onRetry: () -> Unit,
+) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+        when {
+            loading -> CircularProgressIndicator(
+                modifier = Modifier.semantics { contentDescription = "Loading more" },
+            )
+
+            failed -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Could not load more.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = onRetry,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = "Retry loading more" },
+                ) {
+                    Text("Retry")
+                }
+            }
         }
     }
 }

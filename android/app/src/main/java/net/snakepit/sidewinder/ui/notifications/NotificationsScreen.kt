@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AlternateEmail
@@ -35,6 +35,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.model.Notification
 import net.snakepit.sidewinder.core.model.Session
@@ -61,10 +63,10 @@ import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.notifications.NotificationsRepository
 import net.snakepit.sidewinder.core.stream.StreamEvent
 import net.snakepit.sidewinder.core.stream.StreamEventBus
+import net.snakepit.sidewinder.core.text.StatusText
 import net.snakepit.sidewinder.ui.timeline.relativeTimestamp
-import org.jsoup.Jsoup
 
-private sealed interface NotificationsState {
+internal sealed interface NotificationsState {
     /** First page still loading. */
     data object Loading : NotificationsState
 
@@ -118,11 +120,103 @@ private fun NotificationFilter.typesParam(): List<String>? = when (this) {
 }
 
 /**
+ * Pure reduction for a streamed notification arriving while this screen is
+ * open: prepend into Content (deduped by id), and — unlike the previous
+ * behavior that dropped it — turn an Empty unfiltered list into Content
+ * with the new notification. A filtered view never changes on stream
+ * events (the notification may not belong to the filtered set), and the
+ * read mark only advances from the unfiltered view (existing rule).
+ */
+internal fun applyStreamedNotification(
+    state: NotificationsState,
+    filter: NotificationFilter,
+    incoming: Notification,
+): NotificationsState = when {
+    state is NotificationsState.Content ->
+        if (state.items.any { it.id == incoming.id }) state
+        else state.copy(items = listOf(incoming) + state.items)
+
+    state is NotificationsState.Empty && filter == NotificationFilter.All ->
+        NotificationsState.Content(listOf(incoming), nextMaxId = null, loadingMore = false)
+
+    else -> state
+}
+
+/**
+ * Merge a freshly fetched first page into a cached list (re-entry after
+ * the holder already had content). When the fresh page overlaps the cache
+ * the new items are prepended and the cached tail (and its cursor) kept;
+ * with no overlap there is a gap, so the fresh page replaces the cache.
+ * Non-Content states take the fresh page as-is.
+ */
+internal fun mergeFreshFirstPage(
+    state: NotificationsState,
+    fresh: List<Notification>,
+    freshNextMaxId: String?,
+): NotificationsState {
+    val current = state as? NotificationsState.Content
+    if (fresh.isEmpty()) {
+        return current ?: NotificationsState.Empty
+    }
+    if (current == null) return NotificationsState.Content(fresh, freshNextMaxId, loadingMore = false)
+    val cachedIds = current.items.mapTo(HashSet()) { it.id }
+    val overlaps = fresh.any { it.id in cachedIds }
+    if (!overlaps) return NotificationsState.Content(fresh, freshNextMaxId, loadingMore = false)
+    val newer = fresh.filterNot { it.id in cachedIds }
+    return if (newer.isEmpty()) current else current.copy(items = newer + current.items)
+}
+
+/**
+ * One filter view's loaded notifications and scroll position, kept OUTSIDE
+ * composition (same shape as TimelineStore) so rotation or a round trip
+ * through another screen restores the same list at the same place instead
+ * of refetching page 1 at the top. Keyed by session id + filter, LRU 12.
+ */
+internal class NotificationsHolder {
+    var state by mutableStateOf<NotificationsState>(NotificationsState.Loading)
+    var firstVisibleIndex: Int = 0
+    var firstVisibleOffset: Int = 0
+}
+
+/** Process-lifetime store of [NotificationsHolder]s. Main-thread only. */
+internal object NotificationsStore {
+    private const val MAX_HOLDERS = 12
+
+    // accessOrder = true: iteration order is least- to most-recently used.
+    private val holders = LinkedHashMap<String, NotificationsHolder>(16, 0.75f, true)
+
+    fun holder(sessionId: String, filter: NotificationFilter): NotificationsHolder {
+        val key = "$sessionId|$filter"
+        holders[key]?.let { return it }
+        val created = NotificationsHolder()
+        holders[key] = created
+        while (holders.size > MAX_HOLDERS) {
+            val eldest = holders.keys.first()
+            holders.remove(eldest)
+        }
+        return created
+    }
+
+    /** Starting fresh in [filter] must not inherit an old scroll offset. */
+    fun resetScroll(sessionId: String, filter: NotificationFilter) {
+        holder(sessionId, filter).let {
+            it.firstVisibleIndex = 0
+            it.firstVisibleOffset = 0
+        }
+    }
+
+    /** Drop every holder belonging to a session that no longer exists. */
+    fun retainSessions(sessionIds: Set<String>) {
+        holders.keys.removeAll { key -> key.substringBefore('|') !in sessionIds }
+    }
+}
+
+/**
  * Notifications. Port of web `src/views/Notifications.tsx`: paged
  * through `NotificationsRepository` with Link-header max_id paging,
  * infinite scroll near the list end, and the four mandatory states.
  * A filter row above the list narrows the list to all notifications
- * or mentions only; switching filters reloads page 1.
+ * or mentions only; switching filters reloads page 1 at the top.
  *
  * Rows carrying a status open that status's thread; account-only rows
  * (follow, follow_request) are plain, non-clickable rows.
@@ -139,10 +233,19 @@ fun NotificationsScreen(
     onNewestLoaded: (String?) -> Unit = {},
 ) {
     var filter by rememberSaveable { mutableStateOf(NotificationFilter.All) }
-    var state by remember { mutableStateOf<NotificationsState>(NotificationsState.Loading) }
+    // State + scroll live in the store, not composition, so a rotation
+    // (or navigation away and back) restores the same list and place.
+    val holder = remember(session.id, filter) { NotificationsStore.holder(session.id, filter) }
+    var state by holder::state
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val listState = rememberLazyListState()
+    val listState = remember(holder) { LazyListState(holder.firstVisibleIndex, holder.firstVisibleOffset) }
+    DisposableEffect(holder, listState) {
+        onDispose {
+            holder.firstVisibleIndex = listState.firstVisibleItemIndex
+            holder.firstVisibleOffset = listState.firstVisibleItemScrollOffset
+        }
+    }
 
     suspend fun loadFirstPage() {
         state = NotificationsState.Loading
@@ -172,62 +275,88 @@ fun NotificationsScreen(
 
         state = current.copy(loadingMore = true)
         val requestFilter = filter
+        // Write results to the holder that started the request: `state`
+        // follows the active filter, and a filter switch mid-flight must not
+        // strand loadingMore = true on this holder (it is cached for reuse).
+        val requestHolder = holder
         scope.launch {
             try {
                 val page = NotificationsRepository.notifications(api, maxId, requestFilter.typesParam())
-                // Filter switched mid-flight: this page belongs to the old list.
-                if (filter != requestFilter) return@launch
-                val base = (state as? NotificationsState.Content)?.items ?: current.items
+                val base = (requestHolder.state as? NotificationsState.Content)?.items ?: current.items
                 val baseIds = base.mapTo(HashSet()) { it.id }
                 val fresh = page.items.filterNot { it.id in baseIds }
-                state = NotificationsState.Content(base + fresh, page.nextMaxId, loadingMore = false)
+                requestHolder.state = NotificationsState.Content(base + fresh, page.nextMaxId, loadingMore = false)
             } catch (e: ApiError) {
-                (state as? NotificationsState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 scope.launch {
                     snackbarHostState.showSnackbar("Could not load older notifications: the server returned error ${e.status}. Scroll to try again.")
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                (state as? NotificationsState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 scope.launch {
                     snackbarHostState.showSnackbar("Could not load older notifications: ${e.message ?: "network error"}. Scroll to try again.")
                 }
+            } finally {
+                // Success already cleared it; failure and cancellation (screen
+                // left mid-request) must not leave the cached holder stuck.
+                (requestHolder.state as? NotificationsState.Content)
+                    ?.takeIf { it.loadingMore }
+                    ?.let { requestHolder.state = it.copy(loadingMore = false) }
             }
         }
     }
 
-    LaunchedEffect(api, session.id, filter) { loadFirstPage() }
+    // Load page 1 only when this holder has nothing yet: a rotation or a
+    // return visit reuses the cached list instead of resetting it.
+    LaunchedEffect(api, session.id, filter) {
+        if (holder.state !is NotificationsState.Content) {
+            loadFirstPage()
+            return@LaunchedEffect
+        }
+        // Cached content (rotation, or back from another tab): show it at
+        // once, then refresh page 1 silently so the list is current and the
+        // unread badge clears. Failures keep the cached list.
+        try {
+            val page = NotificationsRepository.notifications(api, types = filter.typesParam())
+            val fresh = page.items.distinctBy { it.id }
+            state = mergeFreshFirstPage(state, fresh, page.nextMaxId)
+            if (filter == NotificationFilter.All) onNewestLoaded(fresh.firstOrNull()?.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep showing the cached list; pull-to-refresh retries.
+        }
+    }
 
     // Live notifications from the streaming socket, while this screen is
     // composed. Only the unfiltered view prepends (a filtered query would
     // not necessarily include the new type), and the read mark advances
-    // because the user is looking at the screen right now.
+    // because the user is looking at the screen right now. An Empty
+    // unfiltered list becomes Content so a first-ever notification is
+    // not dropped.
     LaunchedEffect(api, session.id) {
         StreamEventBus.events.collect { event ->
             if (event !is StreamEvent.NotificationArrived) return@collect
-            if (filter != NotificationFilter.All) return@collect
-            val incoming = event.notification
-            val current = state as? NotificationsState.Content ?: return@collect
-            if (current.items.any { it.id == incoming.id }) return@collect
-            state = current.copy(items = listOf(incoming) + current.items)
-            onNewestLoaded(incoming.id)
+            val next = applyStreamedNotification(state, filter, event.notification)
+            if (next != state) {
+                state = next
+                if (filter == NotificationFilter.All) onNewestLoaded(event.notification.id)
+            }
         }
     }
 
-    // Infinite scroll: trigger one page ahead of the last visible item.
-    // Both the last visible index and the state are read inside the
-    // snapshotFlow so a fresh page (or end of list) re-evaluates, and
-    // loadNextPage re-checks the guards so this cannot double-fetch.
+    // Infinite scroll: the flow emits on SCROLL POSITION changes only and
+    // the state is read inside collect. A failed page (loadingMore reset
+    // without any scroll change) therefore cannot re-trigger itself in a
+    // request/snackbar loop — the user has to scroll again to retry.
     LaunchedEffect(listState) {
-        snapshotFlow {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? NotificationsState.Content ?: return@collect
-            if (current.nextMaxId == null || current.loadingMore) return@collect
-            if (lastVisible >= current.items.size - 3) loadNextPage()
-        }
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+            .distinctUntilChanged()
+            .collect { lastVisible ->
+                val current = state as? NotificationsState.Content ?: return@collect
+                if (current.nextMaxId == null || current.loadingMore) return@collect
+                if (lastVisible >= current.items.size - 3) loadNextPage()
+            }
     }
 
     Scaffold(
@@ -238,7 +367,12 @@ fun NotificationsScreen(
             FilterChipRow(
                 selected = filter,
                 onSelect = { selected ->
-                    if (selected != filter) filter = selected
+                    if (selected != filter) {
+                        // A new filter is a new list: never inherit the
+                        // old scroll offset.
+                        NotificationsStore.resetScroll(session.id, selected)
+                        filter = selected
+                    }
                 },
             )
             Box(modifier = Modifier.fillMaxSize().weight(1f)) {
@@ -282,21 +416,23 @@ fun NotificationsScreen(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                items(count = s.items.size, key = { s.items[it].id }) { index ->
-                    NotificationRow(
-                        notification = s.items[index],
-                        onOpenThread = onOpenThread,
-                        onOpenProfile = onOpenProfile,
-                        onOpenFollowRequests = onOpenFollowRequests,
-                    )
-                    if (index < s.items.lastIndex) HorizontalDivider()
-                }
-                if (s.loadingMore) {
-                    item(key = "loading-more") {
-                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.semantics { contentDescription = "Loading older notifications" },
+                        items(count = s.items.size, key = { s.items[it].id }) { index ->
+                            NotificationRow(
+                                notification = s.items[index],
+                                onOpenThread = onOpenThread,
+                                onOpenProfile = onOpenProfile,
+                                onOpenFollowRequests = onOpenFollowRequests,
                             )
+                            if (index < s.items.lastIndex) HorizontalDivider()
+                        }
+                        if (s.loadingMore) {
+                            item(key = "loading-more") {
+                                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.semantics { contentDescription = "Loading older notifications" },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -304,13 +440,12 @@ fun NotificationsScreen(
         }
     }
 }
-}
-}
 
 /**
  * Filter row above the list: All shows every notification type,
  * Mentions shows only mentions. Rendered in every state so the filter
- * stays reachable while loading, error, or empty.
+ * stays reachable while loading, error, or empty. The chip's own label
+ * is its accessibility name — no custom contentDescription.
  */
 @Composable
 private fun FilterChipRow(
@@ -318,28 +453,26 @@ private fun FilterChipRow(
     onSelect: (NotificationFilter) -> Unit,
 ) {
     val chips = listOf(
-        NotificationFilter.All to "Show all notifications",
-        NotificationFilter.Mentions to "Show mentions only",
-        NotificationFilter.Favourites to "Show favourites only",
-        NotificationFilter.Boosts to "Show boosts only",
-        NotificationFilter.Follows to "Show follows and follow requests only",
-        NotificationFilter.Polls to "Show polls only",
-        NotificationFilter.Edits to "Show edited posts only",
+        NotificationFilter.All,
+        NotificationFilter.Mentions,
+        NotificationFilter.Favourites,
+        NotificationFilter.Boosts,
+        NotificationFilter.Follows,
+        NotificationFilter.Polls,
+        NotificationFilter.Edits,
     )
     androidx.compose.foundation.lazy.LazyRow(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(chips.size, key = { chips[it].first.name }) { index ->
-            val (value, description) = chips[index]
+        items(chips.size, key = { chips[it].name }) { index ->
+            val value = chips[index]
             FilterChip(
                 selected = selected == value,
                 onClick = { onSelect(value) },
                 label = { Text(value.label()) },
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics { contentDescription = description },
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
     }
@@ -375,7 +508,10 @@ private fun NotificationRow(
     // empty); show and open the displayed inner status, matching the
     // unwrap behavior of StatusCard.
     val shownStatus = notification.status?.let { it.reblog ?: it }
-    val excerpt = shownStatus?.let { plainTextExcerpt(it.content) }
+    // Plain-text extraction is cached in StatusText and remembered per
+    // content, so recompositions do not re-parse the HTML.
+    val excerptHtml = shownStatus?.content
+    val excerpt = remember(excerptHtml) { excerptHtml?.let { StatusText.plain(it) } }
     val statusId = shownStatus?.id
     val rowDescription = when {
         statusId != null -> "$label. Opens the post"
@@ -489,11 +625,3 @@ private fun typeIcon(type: String) = when (type) {
 private fun actorAvatar(notification: Notification): String =
     notification.account.avatar_static
         ?: notification.account.avatar
-
-/**
- * Plain-text excerpt of server-rendered status HTML: all tags and
- * attributes removed, entities decoded, whitespace collapsed. No HTML
- * is ever interpreted as markup.
- */
-internal fun plainTextExcerpt(html: String): String =
-    Jsoup.parse(html).text().replace(Regex("\\s+"), " ").trim()

@@ -21,7 +21,7 @@ class SessionStore(context: Context) {
 
     /** Storage shape; [Session] itself is not @Serializable in Models.kt. */
     @Serializable
-    private data class StoredSession(
+    internal data class StoredSession(
         val id: String,
         val base: String,
         val token: String,
@@ -42,8 +42,14 @@ class SessionStore(context: Context) {
         explicitNulls = false
     }
 
-    /** Guards every read-modify-write cycle so concurrent callers cannot drop a write. */
-    private val mutex = Mutex()
+    /**
+     * Guards every read-modify-write cycle so concurrent callers cannot
+     * drop a write. Process-wide: three SessionStore instances exist
+     * (MainActivity, LoginScreen, NotifyWorker) and must not interleave.
+     */
+    private companion object {
+        val mutex = Mutex()
+    }
 
     private fun StoredSession.toSession() = Session(id, base, token, account, scopes)
     private fun Session.toStored() = StoredSession(id, base, token, account, scopes)
@@ -84,7 +90,7 @@ class SessionStore(context: Context) {
     /** Insert or replace a session and make it active. */
     suspend fun add(session: Session) = mutex.withLock {
         val data = read()
-        val sessions = data.sessions.filterNot { it.id == session.id } + session.toStored()
+        val sessions = mergeSessions(data.sessions, session.toStored())
         write(SessionFile(sessions, session.id))
     }
 
@@ -105,3 +111,17 @@ class SessionStore(context: Context) {
         write(SessionFile(sessions, activeId))
     }
 }
+
+/**
+ * Merge [incoming] into [existing]: replace by id, and replace a stored
+ * session with the same base AND account id (a re-login on the same account
+ * must replace, not duplicate). Pure so the dedupe rule is unit-testable.
+ */
+internal fun mergeSessions(
+    existing: List<SessionStore.StoredSession>,
+    incoming: SessionStore.StoredSession,
+): List<SessionStore.StoredSession> =
+    existing.filterNot {
+        it.id == incoming.id ||
+            (it.base == incoming.base && it.account.id == incoming.account.id)
+    } + incoming

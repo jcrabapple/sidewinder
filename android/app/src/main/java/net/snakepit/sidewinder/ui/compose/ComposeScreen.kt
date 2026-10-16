@@ -38,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TimePicker
@@ -74,6 +73,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import android.widget.Toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -120,18 +120,6 @@ internal val EXPIRY_OPTIONS = listOf(
     86_400L to "1 day",
     259_200L to "3 days",
     604_800L to "7 days",
-)
-
-/** Per-item media state: uploading, ready (server attachment), or error. */
-internal data class DraftMedia(
-    val key: String,
-    val uri: Uri? = null,
-    val filename: String = "",
-    val attachment: MediaAttachment? = null,
-    val uploading: Boolean = false,
-    val error: String? = null,
-    /** Completes with the attachment on success, null on failure. */
-    val upload: CompletableDeferred<MediaAttachment?>? = null,
 )
 
 private enum class ComposeMode { New, Reply, Edit }
@@ -185,9 +173,9 @@ fun ComposeScreen(
     var visibility by rememberSaveable {
         mutableStateOf(editing?.visibility ?: replyTo?.visibility ?: appSettings.defaultVisibility)
     }
-    val media = remember { mutableStateListOf<DraftMedia>() }
+    val media = rememberSaveable(saver = MediaStateSaver) { mutableStateListOf<DraftMedia>() }
     var pollOn by rememberSaveable { mutableStateOf(false) }
-    val pollOptions = remember { mutableStateListOf("", "") }
+    var pollOptions by rememberSaveable { mutableStateOf(listOf("", "")) }
     var pollMultiple by rememberSaveable { mutableStateOf(false) }
     var pollExpiry by rememberSaveable { mutableLongStateOf(86_400L) }
     var scheduleOn by rememberSaveable { mutableStateOf(false) }
@@ -197,7 +185,7 @@ fun ComposeScreen(
     /** 0 = no picker open, 1 = date step, 2 = time step. */
     var schedulePickerStep by rememberSaveable { mutableIntStateOf(0) }
     var scheduleError by remember { mutableStateOf<String?>(null) }
-    var posting by rememberSaveable { mutableStateOf(false) }
+    var posting by remember { mutableStateOf(false) }
     var pendingAltConfirm by rememberSaveable { mutableStateOf(false) }
     var altDialogKey by rememberSaveable { mutableStateOf<String?>(null) }
     var closePrompt by rememberSaveable { mutableStateOf(false) }
@@ -205,6 +193,10 @@ fun ComposeScreen(
     // Snapshot of the opening state, to tell whether a reply/edit has unsaved work.
     var baseline by rememberSaveable { mutableStateOf("") }
     val uploadJobs = remember { mutableMapOf<String, Job>() }
+    val uploadDeferreds = remember { mutableMapOf<String, CompletableDeferred<MediaAttachment?>>() }
+    // Attachments the user removed in this edit session. An edit never
+    // sends a media_ids list that drops an attachment the user kept.
+    var removedIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -213,16 +205,29 @@ fun ComposeScreen(
         body = TextFieldValue(value, selection = TextRange(value.length))
     }
     fun fingerprint(): String =
-        // body.text, not the composition-time `text` val: this also runs from
-        // effects, where that val is stale (baseline would be "" and Save on).
-        listOf(body.text, cwOn.toString(), spoiler, markSensitive.toString(), media.joinToString { it.attachment?.id + ":" + it.attachment?.description })
-            .joinToString("\u0000")
+        // State objects read at call time, not composition-time vals: this
+        // also runs from effects, where those vals are stale.
+        composeFingerprint(
+            text = body.text,
+            cwOn = cwOn,
+            spoiler = spoiler,
+            markSensitive = markSensitive,
+            media = media.map { (it.attachment?.id ?: "") + ":" + (it.attachment?.description ?: "") },
+            pollOn = pollOn,
+            pollOptions = pollOptions,
+            pollMultiple = pollMultiple,
+            pollExpiry = pollExpiry,
+            visibility = visibility,
+            scheduleOn = scheduleOn,
+            scheduleAtMs = scheduleAtMs,
+        )
 
     // ---- Initial content: edit source, reply mentions, or saved draft ----
     LaunchedEffect(Unit) {
         if (draftReady) {
-            // Recreated (rotation): text and toggles came back via saved state,
-            // but the attachment list did not. New posts recover it from the draft.
+            // Recreated (rotation/process death): text, toggles and the
+            // attachment list all came back via saved state (MediaStateSaver).
+            // New posts also fall back to the draft for pre-saver media.
             if (mode == ComposeMode.New && media.isEmpty()) {
                 draftStore.load(session.id)?.media?.let { saved ->
                     media.addAll(saved.map { DraftMedia(key = UUID.randomUUID().toString(), attachment = it.attachment) })
@@ -233,7 +238,11 @@ fun ComposeScreen(
         when (mode) {
             ComposeMode.Edit -> {
                 val status = editing ?: return@LaunchedEffect
-                setTextAtEnd(editSourceText ?: status.text ?: Jsoup.parse(status.content).wholeText().trim())
+                // Jsoup parsing a long post is too slow for Main.
+                val restored = withContext(Dispatchers.Default) {
+                    editSourceText ?: status.text ?: Jsoup.parse(status.content).wholeText().trim()
+                }
+                setTextAtEnd(restored)
                 spoiler = status.spoiler_text
                 cwOn = status.spoiler_text.isNotBlank()
                 markSensitive = status.sensitive && status.spoiler_text.isBlank()
@@ -258,8 +267,7 @@ fun ComposeScreen(
                 spoiler = draft.spoiler
                 visibility = draft.visibility
                 pollOn = draft.pollOn
-                pollOptions.clear()
-                pollOptions.addAll(draft.pollOptions.ifEmpty { listOf("", "") })
+                pollOptions = draft.pollOptions.ifEmpty { listOf("", "") }
                 pollMultiple = draft.pollMultiple
                 pollExpiry = draft.pollExpiry
                 scheduleOn = draft.scheduleOn
@@ -281,6 +289,9 @@ fun ComposeScreen(
 
     // ---- Debounced draft save (new posts only) ------------------------
     val keyPollOptions = pollOptions.joinToString("\u0000")
+    // Alt text lives inside the attachments, so the debounced save must
+    // also fire when only a description changed.
+    val keyMediaAlt = media.joinToString("\u0000") { (it.attachment?.id ?: "") + ":" + (it.attachment?.description ?: "") }
     suspend fun saveDraftNow() {
         draftStore.save(
             session.id,
@@ -305,7 +316,7 @@ fun ComposeScreen(
         draftReady, text, cwOn, spoiler, visibility,
         pollOn, pollMultiple, pollExpiry, keyPollOptions,
         scheduleOn, scheduleAtMs,
-        media.size, media.count { it.attachment != null },
+        media.size, media.count { it.attachment != null }, keyMediaAlt,
     ) {
         if (!draftReady || mode != ComposeMode.New || posting) return@LaunchedEffect
         if (composerEmpty) {
@@ -325,7 +336,8 @@ fun ComposeScreen(
         val deferred = CompletableDeferred<MediaAttachment?>()
         val index = media.indexOfFirst { it.key == item.key }
         if (index < 0) return
-        media[index] = item.copy(uploading = true, error = null, upload = deferred)
+        media[index] = item.copy(uploading = true, error = null)
+        uploadDeferreds[item.key] = deferred
         uploadJobs[item.key] = scope.launch {
             val attachment = try {
                 val (bytes, name, type) = readPickedImage(context, uri)
@@ -360,6 +372,7 @@ fun ComposeScreen(
             }
             deferred.complete(attachment)
             uploadJobs.remove(item.key)
+            uploadDeferreds.remove(item.key)
         }
     }
 
@@ -370,15 +383,19 @@ fun ComposeScreen(
                 showError("A post holds up to $MAX_MEDIA attachments. The extra images were not added.")
                 break
             }
-            val name = runCatching { queryPickedImage(context, uri).first }.getOrDefault("Attachment")
-            val item = DraftMedia(key = UUID.randomUUID().toString(), uri = uri, filename = name)
+            // No content-resolver query here: it would run on Main in the
+            // picker callback. readPickedImage looks up name/type on IO
+            // inside the upload path; until then the item has no name.
+            val item = DraftMedia(key = UUID.randomUUID().toString(), uri = uri)
             media.add(item)
             uploadItem(item)
         }
     }
 
     fun removeMedia(item: DraftMedia) {
-        media.firstOrNull { it.key == item.key }?.upload?.complete(null)
+        // Explicit removals are the only way an edit may drop an attachment.
+        item.attachment?.id?.let { removedIds = removedIds + it }
+        uploadDeferreds.remove(item.key)?.complete(null)
         uploadJobs.remove(item.key)?.cancel()
         media.removeAll { it.key == item.key }
     }
@@ -418,11 +435,24 @@ fun ComposeScreen(
         scope.launch {
             try {
                 // Wait for in-flight uploads before building the request.
-                media.mapNotNull { it.upload }.forEach { it.await() }
+                media.mapNotNull { uploadDeferreds[it.key] }.forEach { it.await() }
                 val current = media.toList()
                 if (current.any { it.attachment == null }) {
                     showError("Some images did not upload. Retry or remove them, then post again.")
                     return@launch
+                }
+                // Edits send the full keep-list: only attachments the user
+                // removed in this session may leave media_ids. Anything the
+                // user kept falls back to the original attachment list.
+                val originalById = editing?.media_attachments?.associateBy { it.id } ?: emptyMap()
+                val keepIds = if (mode == ComposeMode.Edit) {
+                    editMediaIds(
+                        currentIds = current.map { it.attachment?.id.orEmpty() },
+                        originalIds = originalById.keys.toList(),
+                        removedIds = removedIds,
+                    )
+                } else {
+                    current.mapNotNull { it.attachment?.id }
                 }
                 val sensitive = (cwOn && spoiler.isNotBlank()) || (markSensitive && current.isNotEmpty())
                 val payload: JsonObject = buildJsonObject {
@@ -434,13 +464,16 @@ fun ComposeScreen(
                     if (replyTo != null && mode == ComposeMode.Reply) put("in_reply_to_id", replyTo.id)
                     // Edits always send the list: it is the set of attachments to KEEP.
                     if (current.isNotEmpty() || mode == ComposeMode.Edit) {
-                        putJsonArray("media_ids") { current.forEach { add(JsonPrimitive(it.attachment?.id)) } }
+                        putJsonArray("media_ids") { keepIds.forEach { add(JsonPrimitive(it)) } }
                     }
-                    if (mode == ComposeMode.Edit && current.isNotEmpty()) {
-                        // Alt text of already-attached media rides along with the edit.
+                    if (mode == ComposeMode.Edit && keepIds.isNotEmpty()) {
+                        // Alt text of kept media rides along with the edit;
+                        // items missing from `current` use the original record.
                         putJsonArray("media_attributes") {
-                            current.forEach { item ->
-                                val attachment = item.attachment ?: return@forEach
+                            keepIds.forEach { id ->
+                                val attachment = current.firstOrNull { it.attachment?.id == id }?.attachment
+                                    ?: originalById[id]
+                                    ?: return@forEach
                                 add(buildJsonObject {
                                     put("id", attachment.id)
                                     put("description", attachment.description.orEmpty())
@@ -478,10 +511,10 @@ fun ComposeScreen(
                     )
                     if (mode == ComposeMode.New) draftStore.clear(session.id)
                     keyboard?.hide()
-                    snackbar.showSnackbar(
-                        "Scheduled for ${scheduledAtLabel(scheduled.scheduled_at)}.",
-                        duration = SnackbarDuration.Short,
-                    )
+                    val message = "Scheduled for ${scheduledAtLabel(scheduled.scheduled_at)}."
+                    // Confirm with a toast and dismiss at once: a snackbar on a
+                    // screen that closes either blocks it or dies with it.
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     onDismiss()
                 } else {
                     val posted = api.request(
@@ -738,9 +771,9 @@ fun ComposeScreen(
             if (pollOn) {
                 PollEditor(
                     options = pollOptions,
-                    onOptionChange = { index, value -> pollOptions[index] = value },
-                    onAddOption = { pollOptions.add("") },
-                    onRemoveOption = { pollOptions.removeAt(it) },
+                    onOptionChange = { index, value -> pollOptions = pollOptions.mapIndexed { i, option -> if (i == index) value else option } },
+                    onAddOption = { pollOptions = pollOptions + "" },
+                    onRemoveOption = { index -> pollOptions = pollOptions.filterIndexed { i, _ -> i != index } },
                     multiple = pollMultiple,
                     onMultipleChange = { pollMultiple = it },
                     expiry = pollExpiry,

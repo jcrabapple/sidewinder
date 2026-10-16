@@ -560,7 +560,7 @@ private fun CharacterCounter(used: Int, limit: Int) {
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.semantics(mergeDescendants = true) {
+        modifier = Modifier.clearAndSetSemantics {
             contentDescription = if (remaining >= 0) {
                 "$remaining characters remaining"
             } else {

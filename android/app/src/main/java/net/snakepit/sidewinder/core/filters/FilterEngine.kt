@@ -113,21 +113,28 @@ object FilterEngine {
         return false
     }
 
-    /** Case-insensitive contains, honouring the whole-word rule. */
+    /**
+     * Case-insensitive contains, honouring the whole-word rule. Scans
+     * [field] directly with [String.regionMatches]: lowercasing can change
+     * string length (e.g. `İ`), so indices taken from a lowercased copy
+     * must never be applied to the original.
+     */
     private fun containsKeyword(field: String, keyword: FilterKeyword): Boolean {
-        val haystack = field.lowercase()
         val needle = keyword.keyword.lowercase()
+        if (needle.isEmpty()) return false
+        val len = needle.length
         var from = 0
-        while (true) {
-            val index = haystack.indexOf(needle, from)
-            if (index < 0) return false
-            if (!keyword.whole_word ||
-                startsAtBoundary(field, index) && endsAtBoundary(field, index + needle.length)
-            ) {
-                return true
+        while (from <= field.length - len) {
+            if (field.regionMatches(from, needle, 0, len, ignoreCase = true)) {
+                if (!keyword.whole_word ||
+                    startsAtBoundary(field, from) && endsAtBoundary(field, from + len)
+                ) {
+                    return true
+                }
             }
-            from = index + 1
+            from++
         }
+        return false
     }
 
     /** True when [start] sits at the string edge or after a non-word char. */

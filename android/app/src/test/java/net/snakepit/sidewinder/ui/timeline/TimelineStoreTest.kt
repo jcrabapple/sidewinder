@@ -90,6 +90,31 @@ class TimelineStoreTest {
     }
 
     @Test
+    fun postedStatusTurnsAnEmptyHomeFeedIntoContent() {
+        // applyPosted used to no-op on Empty, silently dropping the post
+        // the composer just published on a fresh account's empty feed.
+        val home = TimelineStore.holder("s1", TimelineSource.Home).also {
+            it.state = TimelineState.Empty
+        }
+        TimelineStore.applyPosted("s1", status("new"))
+        val state = home.state as TimelineState.Content
+        assertEquals(listOf("new"), state.items.map { it.id })
+        assertEquals(null, state.nextMaxId)
+        assertEquals(false, state.loadingMore)
+    }
+
+    @Test
+    fun editsThatMatchNothingLeaveHolderStateUntouched() {
+        // Only holders containing the edited post may be reassigned; a
+        // no-match edit must not churn every other cached feed's state.
+        val home = load("s1", TimelineSource.Home, listOf(status("p1"), status("p2")))
+        val stateBefore = home.state
+        TimelineStore.applyEdit(status("unrelated", content = "no match anywhere"))
+        assertSame(stateBefore, home.state)
+        assertEquals(listOf("p1", "p2"), items(home).map { it.id })
+    }
+
+    @Test
     fun repliesAndOtherAccountsDoNotLandOnHome() {
         val home = load("s1", TimelineSource.Home, listOf(status("p1")))
         TimelineStore.applyPosted("s1", status("r1", replyTo = "p1"))

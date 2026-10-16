@@ -5,6 +5,7 @@ import java.time.OffsetDateTime
 import net.snakepit.sidewinder.core.model.Account
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
+import net.snakepit.sidewinder.core.network.Page
 import net.snakepit.sidewinder.core.timeline.TimelineRepository
 import net.snakepit.sidewinder.core.timeline.TimelineSource
 
@@ -37,14 +38,31 @@ object CatchUpRepository {
         api: Api,
         cutoff: Instant,
         onProgress: suspend (Int) -> Unit = {},
+    ): List<Status> = collectPages(cutoff, onProgress) { maxId ->
+        TimelineRepository.fetch(api, TimelineSource.Home, maxId)
+    }
+
+    /**
+     * [collect] with the page fetch injected, so the walk is testable
+     * without a server. [fetch] mirrors [TimelineRepository.fetch]'s
+     * max_id paging contract.
+     */
+    suspend fun collectPages(
+        cutoff: Instant,
+        onProgress: suspend (Int) -> Unit = {},
+        fetch: suspend (String?) -> Page<Status>,
     ): List<Status> {
         val collected = mutableListOf<Status>()
         var maxId: String? = null
         repeat(MAX_PAGES) {
-            val page = TimelineRepository.fetch(api, TimelineSource.Home, maxId)
+            val page = fetch(maxId)
             if (page.items.isEmpty()) return collected.toList().asReversed()
             var reachedCutoff = false
             for (status in page.items) {
+                // An unparseable created_at is a data glitch, not the
+                // start of history: skip it and keep walking, or one bad
+                // stamp would end the whole digest.
+                if (createdAtOrNull(status) == null) continue
                 if (createdAt(status) < cutoff) {
                     reachedCutoff = true
                     break
@@ -58,9 +76,12 @@ object CatchUpRepository {
         return collected.toList().asReversed()
     }
 
+    /** ISO `created_at` parse; null when the stamp is unparseable. */
+    fun createdAtOrNull(status: Status): Instant? =
+        runCatching { OffsetDateTime.parse(status.created_at).toInstant() }.getOrNull()
+
     /** ISO `created_at` parse; unparseable stamps count as very old. */
-    fun createdAt(status: Status): Instant =
-        runCatching { OffsetDateTime.parse(status.created_at).toInstant() }.getOrDefault(Instant.EPOCH)
+    fun createdAt(status: Status): Instant = createdAtOrNull(status) ?: Instant.EPOCH
 }
 
 /** Digest row filter, port of the web view's All / Originals / Boosts / Replies tabs. */

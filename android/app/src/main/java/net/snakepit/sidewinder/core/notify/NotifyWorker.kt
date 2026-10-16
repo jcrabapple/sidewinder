@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.builtins.ListSerializer
 import net.snakepit.sidewinder.MainActivity
 import net.snakepit.sidewinder.core.datastore.SessionStore
@@ -35,7 +36,16 @@ class NotifyWorker(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        runCatching { pollOnce(applicationContext) }
+        try {
+            pollOnce(applicationContext)
+        } catch (e: CancellationException) {
+            // Worker cancelled (stopped/expired): re-arm so WorkManager
+            // sees the cancellation instead of a silent success.
+            throw e
+        } catch (_: Exception) {
+            // Every failure is silent: the worker never crashes the app
+            // in the background.
+        }
         return Result.success()
     }
 

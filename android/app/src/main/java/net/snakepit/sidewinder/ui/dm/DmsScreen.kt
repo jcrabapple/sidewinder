@@ -56,14 +56,39 @@ import net.snakepit.sidewinder.core.model.Conversation
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.text.StatusText
 import net.snakepit.sidewinder.ui.timeline.relativeTimestamp
-import org.jsoup.Jsoup
 
-private sealed interface DmsState {
+internal sealed interface DmsState {
     data object Loading : DmsState
     data class Error(val message: String) : DmsState
     data object Empty : DmsState
     data class Content(val items: List<Conversation>, val nextMaxId: String?, val loadingMore: Boolean) : DmsState
+}
+
+/**
+ * Pure reduction for marking one conversation read: only a Content state
+ * carries rows, so anything else is returned untouched (the old unchecked
+ * `state as DmsState.Content` cast would throw here).
+ */
+internal fun applyConversationRead(state: DmsState, id: String): DmsState = when (state) {
+    is DmsState.Content -> state.copy(
+        items = state.items.map { if (it.id == id) it.copy(unread = false) else it },
+    )
+    else -> state
+}
+
+/**
+ * Pure reduction for deleting one conversation: removing the LAST
+ * conversation leaves no rows, so the state becomes Empty instead of a
+ * Content with an empty list (which renders nothing and cannot page).
+ */
+internal fun applyConversationDeleted(state: DmsState, id: String): DmsState = when (state) {
+    is DmsState.Content -> {
+        val remaining = state.items.filterNot { it.id == id }
+        if (remaining.isEmpty()) DmsState.Empty else state.copy(items = remaining)
+    }
+    else -> state
 }
 
 /**
@@ -173,11 +198,12 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
                                 scope.launch {
                                     try {
                                         ConversationsRepository.markRead(api, session.token, conversation.id)
-                                        val fresh = conversation.copy(unread = false)
-                                        state = (state as DmsState.Content)
-                                            .copy(items = state.let { cur ->
-                                                (cur as DmsState.Content).items.map { if (it.id == fresh.id) fresh else it }
-                                            })
+                                        state = applyConversationRead(
+                                            state as? DmsState.Content ?: return@launch,
+                                            conversation.id,
+                                        )
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (_: Exception) {
                                         // Mark-read is best-effort; the dot survives a failure.
                                     }
@@ -188,9 +214,8 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
                             scope.launch {
                                 try {
                                     ConversationsRepository.delete(api, session.token, conversation.id)
-                                    state = (state as DmsState.Content).copy(items = state.let { cur ->
-                                        (cur as DmsState.Content).items.filterNot { it.id == conversation.id }
-                                    })
+                                    val current = state as? DmsState.Content ?: return@launch
+                                    state = applyConversationDeleted(current, conversation.id)
                                 } catch (e: ApiError) {
                                     snackbar.showSnackbar("Could not delete the conversation: the server returned error ${e.status}. Try again.")
                                 } catch (e: CancellationException) {
@@ -226,7 +251,10 @@ private fun ConversationRow(
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val last = conversation.last_status
-    val excerpt = last?.let { Jsoup.parse(it.content).text() }.orEmpty()
+    // Plain-text extraction is cached in StatusText and remembered per
+    // content, so recompositions do not re-parse the HTML.
+    val excerptHtml = last?.content
+    val excerpt = remember(excerptHtml) { excerptHtml?.let { StatusText.plain(it) } }.orEmpty()
     val names = conversation.accounts
         .map { it.display_name?.takeIf { n -> n.isNotBlank() } ?: it.username }
         .ifEmpty { listOf("Unknown account") }

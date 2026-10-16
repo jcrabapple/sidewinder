@@ -1,6 +1,7 @@
 package net.snakepit.sidewinder.ui.timeline
 
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedButton
@@ -64,13 +65,17 @@ fun TagFollowButton(api: Api, name: String, onNotice: (String) -> Unit) {
         }
     }
     val modifier = Modifier
-        .heightIn(min = 40.dp)
+        .heightIn(min = 48.dp)
         .semantics { contentDescription = if (current) "Unfollow hashtag $name" else "Follow hashtag $name" }
     if (current) {
-        OutlinedButton(onClick = toggle, enabled = !busy, modifier = modifier) { Text("Following") }
+        OutlinedButton(onClick = toggle, enabled = !busy, modifier = modifier) {
+            // The spinner replaces the label while the toggle is in flight,
+            // at the same size in both branches so the button never jumps.
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp)) else Text("Following")
+        }
     } else {
         FilledTonalButton(onClick = toggle, enabled = !busy, modifier = modifier) {
-            if (busy) CircularProgressIndicator(Modifier.heightIn(max = 18.dp)) else Text("Follow")
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp)) else Text("Follow")
         }
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -46,6 +47,7 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import net.snakepit.sidewinder.core.lists.ListMembersLogic
 import net.snakepit.sidewinder.core.lists.ListsRepository
 import net.snakepit.sidewinder.core.model.Account
 import net.snakepit.sidewinder.core.model.Session
@@ -102,10 +104,15 @@ fun ListMembersScreen(
 ) {
     var state by remember { mutableStateOf<MembersState>(MembersState.Loading) }
     var search by remember { mutableStateOf<SearchState>(SearchState.Idle) }
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+
+    // Failed load-more pages back off exponentially, so a persistent
+    // failure at the tail cannot retry in a tight infinite loop.
+    var pageFailures by remember { mutableStateOf(0) }
+    var nextRetryAtMs by remember { mutableStateOf(0L) }
 
     // Every id on the list right now, including optimistic removals and
     // additions, so Add buttons and the search panel stay consistent.
@@ -144,12 +151,18 @@ fun ListMembersScreen(
                 val baseIds = base.mapTo(HashSet()) { it.id }
                 val fresh = page.items.filterNot { it.id in baseIds }
                 state = MembersState.Content(base + fresh, page.nextMaxId, loadingMore = false)
+                pageFailures = 0
+                nextRetryAtMs = 0L
             } catch (e: ApiError) {
+                pageFailures++
+                nextRetryAtMs = System.currentTimeMillis() + ListMembersLogic.PageRetry.delayMs(pageFailures)
                 (state as? MembersState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 snackbarHostState.showSnackbar("Could not load older members: the server returned error ${e.status}. Scroll to try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                pageFailures++
+                nextRetryAtMs = System.currentTimeMillis() + ListMembersLogic.PageRetry.delayMs(pageFailures)
                 (state as? MembersState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 snackbarHostState.showSnackbar("Could not load older members: ${e.message ?: "network error"}. Scroll to try again.")
             }
@@ -199,7 +212,11 @@ fun ListMembersScreen(
     }
 
     fun add(account: Account) {
-        if (account.id in memberIds) return
+        // Guard against duplicates with the ids live at click time, not
+        // the set captured when the row was composed.
+        val idsNow = (state as? MembersState.Content)
+            ?.members?.let { ListMembersLogic.memberIds(it) } ?: emptySet()
+        if (account.id in idsNow) return
         scope.launch {
             try {
                 ListsRepository.addMembers(api, listId, listOf(account.id))
@@ -222,13 +239,17 @@ fun ListMembersScreen(
                 )
                 return@launch
             }
+            snackbarHostState.showSnackbar("Added @${account.acct} to \"$listTitle\".")
             when (val cur = state) {
                 is MembersState.Content ->
                     if (cur.members.none { it.id == account.id }) {
                         state = cur.copy(members = cur.members + account)
                     }
                 MembersState.Empty -> state = MembersState.Content(listOf(account), null, loadingMore = false)
-                else -> Unit
+                // The first page is still loading (or failed): the add
+                // succeeded server-side, so reload rather than losing
+                // the member from the UI.
+                else -> loadFirstPage()
             }
             // A freshly added account should not linger as a search hit.
             when (val cur = search) {
@@ -249,6 +270,7 @@ fun ListMembersScreen(
         }.collect { (lastVisible, snapshot) ->
             val current = snapshot as? MembersState.Content ?: return@collect
             if (current.nextMaxId == null || current.loadingMore) return@collect
+            if (System.currentTimeMillis() < nextRetryAtMs) return@collect
             if (lastVisible >= current.members.size - 3) loadNextPage()
         }
     }
@@ -264,7 +286,12 @@ fun ListMembersScreen(
         delay(300)
         try {
             val results = SearchRepository.search(api, trimmed, "accounts").accounts
-            search = SearchState.Results(results.filterNot { it.id in memberIds })
+            // Filter with the member ids current at apply time: members
+            // may have been added or removed while the search was in
+            // flight, and a composition-time set would go stale.
+            val idsNow = (state as? MembersState.Content)
+                ?.members?.let { ListMembersLogic.memberIds(it) } ?: emptySet()
+            search = SearchState.Results(ListMembersLogic.hideExistingMembers(results, idsNow))
         } catch (e: ApiError) {
             search = SearchState.Error("Search failed: the server returned error ${e.status}. Edit the query to retry.")
         } catch (e: CancellationException) {
@@ -438,7 +465,9 @@ private fun MemberRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .semantics { contentDescription = "Member $name, @${account.acct}" },
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Member $name, @${account.acct}"
+            },
     ) {
         AsyncImage(
             model = account.avatar_static ?: account.avatar,
@@ -490,7 +519,9 @@ private fun SearchResultRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "Search result $name, @${account.acct}" },
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Search result $name, @${account.acct}"
+            },
     ) {
         AsyncImage(
             model = account.avatar_static ?: account.avatar,

@@ -43,6 +43,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
@@ -127,6 +130,13 @@ fun TimelineScreen(
     var showBoosts by rememberSaveable { mutableStateOf(true) }
     var showReplies by rememberSaveable { mutableStateOf(true) }
     var hideSelfBoosts by rememberSaveable { mutableStateOf(false) }
+    // Rendered (filtered) row count and raw item count, written from
+    // composition and read by the scroll effect. Kept as plain snapshot
+    // state rather than reading `state` inside the snapshotFlow: a failed
+    // load-more flips `loadingMore` back without changing either count, so
+    // the flow does not re-emit and a failure cannot retry forever.
+    var renderedCount by remember { mutableStateOf(0) }
+    var rawCount by remember { mutableStateOf(0) }
 
     suspend fun fetchFirstPage(): TimelineState {
         val page = TimelineRepository.fetch(api, resolved)
@@ -207,7 +217,16 @@ fun TimelineScreen(
                 // Home only: persist the read position server-side (markers).
                 if (resolved == TimelineSource.Home) {
                     (state as? TimelineState.Content)?.items?.firstOrNull()?.id?.let { newest ->
-                        scope.launch { runCatching { TimelineRepository.saveMarker(api, newest) } }
+                        scope.launch {
+                            try {
+                                TimelineRepository.saveMarker(api, newest)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // The marker is best-effort; losing one just
+                                // means this read position is not remembered.
+                            }
+                        }
                     }
                 }
             } catch (e: ApiError) {
@@ -235,13 +254,23 @@ fun TimelineScreen(
 
     // Server-backed read position (markers, home only): when the server
     // knows about posts newer than this device's cache, pull a fresh page.
+    // The marker fetch and the Content wait are both awaited; on cold start
+    // the state is still Loading, so the Content comparison must not run
+    // against Loading and then never re-run — hence the snapshotFlow wait.
     LaunchedEffect(api, session.id, resolved) {
         if (resolved != TimelineSource.Home) return@LaunchedEffect
-        val marker = runCatching { TimelineRepository.readMarker(api) }.getOrNull() ?: return@LaunchedEffect
-        val current = state as? TimelineState.Content ?: return@LaunchedEffect
-        val newest = current.items.firstOrNull()?.id ?: return@LaunchedEffect
-        // ULIDs compare lexicographically in chronological order.
-        if (marker > newest) refresh()
+        try {
+            val marker = TimelineRepository.readMarker(api) ?: return@LaunchedEffect
+            val current = snapshotFlow { state }.filterIsInstance<TimelineState.Content>().first()
+            val newest = current.items.firstOrNull()?.id ?: return@LaunchedEffect
+            // ULIDs compare lexicographically in chronological order.
+            if (marker > newest) refresh()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The marker read is best-effort; a failure just skips the
+            // freshness check and the next refresh catches up.
+        }
     }
 
     // Bottom-nav reselect: scroll up, or refresh when already at the top.
@@ -252,18 +281,26 @@ fun TimelineScreen(
         }
     }
 
-    // Infinite scroll: trigger one page ahead of the last visible item.
-    // Both the last visible index and the state are read inside the
-    // snapshotFlow so a fresh page (or end of feed) re-evaluates, and
-    // loadNextPage re-checks the guards so this cannot double-fetch.
+    // Infinite scroll: the flow is driven by the scroll position and the
+    // rendered/raw row counts only — never by the store state. Reading
+    // `state` here would re-emit when a failed load-more resets
+    // `loadingMore`, retrying the same request forever. The threshold is
+    // compared against the RENDERED (filtered) count, and a feed whose
+    // rows are nearly all hidden keeps paging so filters cannot dead-end
+    // it. `state` is read inside collect, and loadNextPage re-checks its
+    // guards so this cannot double-fetch.
     LaunchedEffect(listState) {
         snapshotFlow {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? TimelineState.Content ?: return@collect
+            Triple(lastVisible, renderedCount, rawCount)
+        }.collect { (lastVisible, rendered, raw) ->
+            val current = state as? TimelineState.Content ?: return@collect
             if (current.nextMaxId == null || current.loadingMore) return@collect
-            if (lastVisible >= current.items.size - 3) loadNextPage()
+            // Fewer than 3 rendered rows while more pages exist: the loaded
+            // set is filtered away, so scroll position alone can never reach
+            // the threshold — keep paging forward instead.
+            val nearEnd = lastVisible >= rendered - 3
+            if (nearEnd || (rendered <= 3 && raw > rendered)) loadNextPage()
         }
     }
 
@@ -309,13 +346,25 @@ fun TimelineScreen(
                 is TimelineState.Content -> {
                     // Client-side display filters over the loaded page set:
                     // boosts, replies, self-boosts, and (wellbeing) alt-less media.
-                    val items = s.items.filter { st ->
-                        val shown = st.reblog ?: st
-                        if (!showBoosts && st.reblog != null) return@filter false
-                        if (!showReplies && shown.in_reply_to_id != null) return@filter false
-                        if (hideSelfBoosts && st.reblog != null && st.account.id == shown.account.id) return@filter false
-                        if (settings.hideNoAltPosts && shown.media_attachments.any { it.description.isNullOrBlank() }) return@filter false
-                        true
+                    // Remembered on its inputs so paging logic can read the
+                    // rendered count without re-filtering on every recomposition.
+                    val items = remember(s.items, showBoosts, showReplies, hideSelfBoosts, settings.hideNoAltPosts) {
+                        s.items.filter { st ->
+                            val shown = st.reblog ?: st
+                            if (!showBoosts && st.reblog != null) return@filter false
+                            if (!showReplies && shown.in_reply_to_id != null) return@filter false
+                            if (hideSelfBoosts && st.reblog != null && st.account.id == shown.account.id) return@filter false
+                            if (settings.hideNoAltPosts && shown.media_attachments.any { it.description.isNullOrBlank() }) return@filter false
+                            true
+                        }
+                    }
+                    // How many rows the list actually renders (the filtered
+                    // count plus the display-filter header), for the
+                    // infinite-scroll threshold; also the raw page-set size,
+                    // so a page fully hidden by filters still advances paging.
+                    SideEffect {
+                        renderedCount = items.size + if (showDisplayFilters) 1 else 0
+                        rawCount = s.items.size
                     }
                     LazyColumn(
                         state = listState,
@@ -335,7 +384,11 @@ fun TimelineScreen(
                                 )
                             }
                         }
-                        items(count = items.size, key = { items[it].id }) { index ->
+                        items(
+                            count = items.size,
+                            key = { items[it].id },
+                            contentType = { "status" },
+                        ) { index ->
                             StatusCard(
                                 status = items[index],
                                 api = api,

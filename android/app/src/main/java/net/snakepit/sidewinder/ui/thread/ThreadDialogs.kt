@@ -58,7 +58,9 @@ fun HistoryDialog(statusId: String, api: Api, baseUrl: String, onDismiss: () -> 
     var state by remember(statusId) {
         mutableStateOf<HistoryState>(HistoryState.Loading)
     }
-    androidx.compose.runtime.LaunchedEffect(statusId) {
+    // Bump to re-run the fetch from the Retry button.
+    var attempt by remember(statusId) { mutableStateOf(0) }
+    androidx.compose.runtime.LaunchedEffect(statusId, attempt) {
         state = try {
             HistoryState.Content(ThreadRepository.history(api, statusId))
         } catch (e: ApiError) {
@@ -83,7 +85,18 @@ fun HistoryDialog(statusId: String, api: Api, baseUrl: String, onDismiss: () -> 
                     )
                 }
 
-                is HistoryState.Error -> Text(s.message, style = MaterialTheme.typography.bodyMedium)
+                is HistoryState.Error -> Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(s.message, style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.material3.TextButton(
+                        onClick = { attempt += 1 },
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = "Retry loading edit history" },
+                    ) { Text("Retry") }
+                }
 
                 is HistoryState.Content -> Column(
                     modifier = Modifier
@@ -142,37 +155,48 @@ fun UnrollDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Column(
+        // Surface with the theme surface color: the dialog body previously
+        // rendered transparent over the dialog scrim.
+        androidx.compose.material3.Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
-                .clip(MaterialTheme.shapes.large)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(16.dp),
         ) {
-            Text(
-                "Thread as article",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.semantics { contentDescription = "Thread unrolled as an article" },
-            )
-            Text(
-                text = "${ancestors.size + 1 + descendants.size} posts",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            (ancestors + focus + descendants).forEach { status ->
-                HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                ArticlePost(status = status, baseUrl = baseUrl)
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "Thread as article",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.semantics { contentDescription = "Thread unrolled as an article" },
+                )
+                Text(
+                    text = "${ancestors.size + 1 + descendants.size} posts",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .padding(top = 4.dp),
+                ) {
+                    val posts = ancestors + focus + descendants
+                    items(count = posts.size, key = { posts[it].id }) { index ->
+                        HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                        ArticlePost(status = posts[index], baseUrl = baseUrl)
+                    }
+                }
+                androidx.compose.material3.TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .heightIn(min = 48.dp)
+                        .align(Alignment.CenterHorizontally)
+                        .semantics { contentDescription = "Close the article view" },
+                ) { Text("Close") }
             }
-            androidx.compose.material3.TextButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .padding(top = 8.dp)
-                    .heightIn(min = 48.dp)
-                    .align(Alignment.CenterHorizontally)
-                    .semantics { contentDescription = "Close the article view" },
-            ) { Text("Close") }
         }
     }
 }

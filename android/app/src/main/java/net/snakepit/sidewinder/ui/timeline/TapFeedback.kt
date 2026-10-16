@@ -4,12 +4,15 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.scale
@@ -20,11 +23,14 @@ import net.snakepit.sidewinder.ui.theme.LocalReduceMotion
  * bookmark, reply): the icon squishes slightly while pressed and settles
  * back on release. Honors Reduce motion (no scale change at all).
  *
- * Use INSIDE an IconButton on the icon: `Icon(..., modifier = Modifier.bouncing())`.
+ * Use INSIDE an IconButton on the icon, passing the SAME
+ * [InteractionSource] the IconButton (or clickable) uses, so the press
+ * events actually reach this modifier:
+ * `val src = remember { MutableInteractionSource() }` then
+ * `IconButton(interactionSource = src) { Icon(..., Modifier.bouncing(src)) }`.
  */
-fun Modifier.bouncing(): Modifier = composed {
+fun Modifier.bouncing(interactionSource: InteractionSource): Modifier = composed {
     val reduceMotion = LocalReduceMotion.current
-    val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale = remember { Animatable(1f) }
     LaunchedEffect(isPressed, reduceMotion) {
@@ -49,8 +55,13 @@ fun Modifier.bouncing(): Modifier = composed {
 fun Modifier.pulseOn(active: Boolean): Modifier {
     val reduceMotion = LocalReduceMotion.current
     val scale = remember { Animatable(1f) }
+    // Fire only on a false -> true transition: rows that are already
+    // active at first composition must not replay the pop (K10/G2-8).
+    var previous by remember { mutableStateOf(active) }
     LaunchedEffect(active, reduceMotion) {
-        if (!active || reduceMotion) {
+        val newlyActive = active && !previous
+        previous = active
+        if (!newlyActive || reduceMotion) {
             scale.snapTo(1f)
             return@LaunchedEffect
         }

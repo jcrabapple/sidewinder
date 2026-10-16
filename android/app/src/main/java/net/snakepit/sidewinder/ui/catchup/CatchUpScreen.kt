@@ -51,6 +51,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.catchup.CatchUpRepository
+import net.snakepit.sidewinder.core.catchup.DigestCache
 import net.snakepit.sidewinder.core.catchup.DigestEntry
 import net.snakepit.sidewinder.core.catchup.DigestFilter
 import net.snakepit.sidewinder.core.catchup.DigestSort
@@ -104,16 +105,31 @@ fun CatchUpScreen(api: Api, session: Session) {
     var state by remember { mutableStateOf<DigestState>(DigestState.Loading(0)) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
-    fun load() {
+    fun load(force: Boolean) {
         // A range change while a walk is in flight abandons the old walk.
         loadJob?.cancel()
-        state = DigestState.Loading(0)
         loadJob = scope.launch {
+            // Rotation re-runs the load effect; the cache (keyed by
+            // session + hours) serves it instead of re-walking up to 20
+            // pages of home timeline. Explicit refresh bypasses it.
+            if (!force) {
+                val cached = DigestCache.get(session.id, hours)
+                if (cached != null) {
+                    state = if (cached.isEmpty()) {
+                        DigestState.Empty(rangeLabel(hours))
+                    } else {
+                        DigestState.Content(cached, rangeLabel(hours))
+                    }
+                    return@launch
+                }
+            }
+            state = DigestState.Loading(0)
             state = try {
                 val cutoff = CatchUpRepository.cutoffFor(hours)
                 val statuses = CatchUpRepository.collect(api, cutoff) { loaded ->
                     state = DigestState.Loading(loaded)
                 }
+                DigestCache.put(session.id, hours, statuses)
                 if (statuses.isEmpty()) {
                     DigestState.Empty(rangeLabel(hours))
                 } else {
@@ -137,7 +153,7 @@ fun CatchUpScreen(api: Api, session: Session) {
         scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
-    LaunchedEffect(api, session.id, hours) { load() }
+    LaunchedEffect(api, session.id, hours) { load(force = false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -154,7 +170,12 @@ fun CatchUpScreen(api: Api, session: Session) {
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = { load() },
+                    onClick = {
+                        // Explicit refresh drops the cache, so the walk
+                        // re-fetches even for the current range.
+                        DigestCache.invalidate(session.id)
+                        load(force = true)
+                    },
                     modifier = Modifier
                         .heightIn(min = 48.dp)
                         .semantics { contentDescription = "Refresh digest" },
@@ -188,7 +209,7 @@ fun CatchUpScreen(api: Api, session: Session) {
                     ) {
                         Text(s.message, style = MaterialTheme.typography.bodyMedium)
                         Button(
-                            onClick = { load() },
+                            onClick = { load(force = true) },
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .semantics { contentDescription = "Retry loading the digest" },
@@ -225,8 +246,23 @@ fun CatchUpScreen(api: Api, session: Session) {
                     onCompose = { replyToId -> actions?.openCompose?.invoke(replyToId) },
                     onStatusUpdated = { updated ->
                         // A favourite or boost made from the digest keeps
-                        // the cached home timeline in sync.
+                        // the cached home timeline in sync AND patches
+                        // the digest's own state, so the row shows the
+                        // change without a refetch.
                         TimelineStore.applyEdit(updated.reblog ?: updated)
+                        val originalId = updated.reblog?.id ?: updated.id
+                        val cur = state
+                        if (cur is DigestState.Content) {
+                            state = cur.copy(
+                                statuses = cur.statuses.map { s ->
+                                    when {
+                                        s.id == updated.id || s.id == originalId -> updated
+                                        s.reblog?.id == updated.id -> s.copy(reblog = updated)
+                                        else -> s
+                                    }
+                                },
+                            )
+                        }
                     },
                     onNotice = { notice(it) },
                 )
@@ -388,7 +424,9 @@ private fun DigestRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, top = 8.dp)
-                    .semantics { contentDescription = "Boosted by ${boosterNames(entry)}" },
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "Boosted by ${boosterNames(entry)}"
+                    },
             ) {
                 Icon(
                     Icons.Outlined.Repeat,

@@ -106,10 +106,13 @@ class StreamingClient(
             val attempt = attempts++
             val pending = scope.launch {
                 delay(StreamBackoff.delayMs(attempt))
-                synchronized(lock) {
-                    if (stopped) return@synchronized
-                    reconnectJob = null
+                val go = synchronized(lock) {
+                    if (stopped) false else {
+                        reconnectJob = null
+                        true
+                    }
                 }
+                if (!go) return@launch
                 connect()
             }
             reconnectJob = pending

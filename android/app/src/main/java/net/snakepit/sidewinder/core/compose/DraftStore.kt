@@ -1,7 +1,10 @@
 package net.snakepit.sidewinder.core.compose
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -56,18 +59,27 @@ class DraftStore(context: Context) {
         return File(dir.apply { mkdirs() }, "$sessionId.json")
     }
 
-    suspend fun save(sessionId: String, draft: ComposeDraft): Unit = withContext(Dispatchers.IO) {
-        val target = fileFor(sessionId)
-        val tmp = File(target.parentFile, target.name + ".tmp")
-        try {
-            tmp.writeText(json.encodeToString(ComposeDraft.serializer(), draft))
-            if (!tmp.renameTo(target)) {
-                target.delete()
-                tmp.renameTo(target)
+    private companion object {
+        /** Process-wide: serializes save/clear across DraftStore instances. */
+        val mutex = Mutex()
+    }
+
+    suspend fun save(sessionId: String, draft: ComposeDraft): Unit = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            val target = fileFor(sessionId)
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            try {
+                tmp.writeText(json.encodeToString(ComposeDraft.serializer(), draft))
+                if (!tmp.renameTo(target)) {
+                    target.delete()
+                    tmp.renameTo(target)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Blocked storage / quota: draft recovery silently unavailable.
+                tmp.delete()
             }
-        } catch (_: Exception) {
-            // Blocked storage / quota: draft recovery silently unavailable.
-            tmp.delete()
         }
     }
 
@@ -84,16 +96,22 @@ class DraftStore(context: Context) {
             } else {
                 draft
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
     }
 
-    suspend fun clear(sessionId: String): Unit = withContext(Dispatchers.IO) {
-        try {
-            fileFor(sessionId).delete()
-        } catch (_: Exception) {
-            // Nothing to do.
+    suspend fun clear(sessionId: String): Unit = mutex.withLock {
+        withContext(Dispatchers.IO) {
+            try {
+                fileFor(sessionId).delete()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Nothing to do.
+            }
         }
     }
 }

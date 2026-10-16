@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.model.Account
 import net.snakepit.sidewinder.core.model.Session
@@ -94,6 +95,8 @@ fun AccountListScreen(
             if (fresh.isEmpty()) AccountListState.Empty else AccountListState.Content(fresh, page.nextMaxId, loadingMore = false)
         } catch (e: ApiError) {
             AccountListState.Error("Could not load this list: the server returned error ${e.status}. Check your connection, then retry.")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             AccountListState.Error("Could not load this list: ${e.message ?: "network error"}. Check your connection, then retry.")
         }
@@ -119,6 +122,8 @@ fun AccountListScreen(
             } catch (e: ApiError) {
                 (state as? AccountListState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 showNotice("Could not load more accounts: the server returned error ${e.status}. Scroll to try again.")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 (state as? AccountListState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
                 showNotice("Could not load more accounts: ${e.message ?: "network error"}. Scroll to try again.")

@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import net.snakepit.sidewinder.core.insights.InsightsCache
 import net.snakepit.sidewinder.core.insights.InsightsRepository
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
@@ -65,11 +66,21 @@ fun InsightsScreen(api: Api, session: Session) {
     var state by remember(session.id) { mutableStateOf<InsightsState>(InsightsState.Loading(0)) }
 
     LaunchedEffect(api, session.id, refreshKey) {
+        // Rotation re-runs the load effect; the cache (keyed by session)
+        // serves it instead of re-fetching up to 12 pages. refreshKey > 0
+        // means the explicit refresh button: bypass and drop the cache.
+        if (refreshKey > 0) InsightsCache.invalidate(session.id)
+        val cached = if (refreshKey == 0) InsightsCache.get(session.id) else null
+        if (cached != null) {
+            state = if (cached.fetched == 0) InsightsState.Empty else InsightsState.Content(cached)
+            return@LaunchedEffect
+        }
         state = InsightsState.Loading(0)
         state = try {
             val insights = InsightsRepository.load(api, session.account.id) { fetched ->
                 state = InsightsState.Loading(fetched)
             }
+            InsightsCache.put(session.id, insights)
             if (insights.fetched == 0) InsightsState.Empty else InsightsState.Content(insights)
         } catch (e: CancellationException) {
             throw e
@@ -290,7 +301,7 @@ private fun StatCell(stat: Stat, modifier: Modifier = Modifier) {
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.semantics { contentDescription = stat.description },
+        modifier = modifier.semantics(mergeDescendants = true) { contentDescription = stat.description },
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(

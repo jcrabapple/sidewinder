@@ -1,6 +1,7 @@
 package net.snakepit.sidewinder.ui.filters
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,9 +42,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,22 +55,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import net.snakepit.sidewinder.core.filters.FilterV2
 import net.snakepit.sidewinder.core.filters.FiltersRepository
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 
-private sealed interface FiltersState {
+internal sealed interface FiltersState {
     data object Loading : FiltersState
     data class Error(val message: String) : FiltersState
     data object Empty : FiltersState
     data class Content(val items: List<FilterV2>) : FiltersState
 }
 
+/** The list state a failed mutation reverts to: Empty when the optimistic change emptied the list. */
+internal fun stateAfterRevert(previous: List<FilterV2>): FiltersState =
+    if (previous.isEmpty()) FiltersState.Empty else FiltersState.Content(previous)
+
 /** (keyword text, whole word) pairs backing the keyword editor rows. */
+@Serializable
 private data class KeywordRow(val keyword: String, val wholeWord: Boolean, val existingId: String? = null)
 
+@Serializable
 private data class EditorState(
     val id: String? = null, // null = creating a new filter
     val title: String = "",
@@ -93,6 +105,31 @@ private val EXPIRIES = listOf(
     "30 days" to 2_592_000L,
 )
 
+private val editorJson = Json { ignoreUnknownKeys = true }
+
+private val editorSaver = Saver<EditorState?, String>(
+    save = { value -> value?.let { editorJson.encodeToString(EditorState.serializer(), it) } },
+    restore = { text ->
+        if (text == null) null
+        else runCatching { editorJson.decodeFromString(EditorState.serializer(), text) }.getOrNull()
+    },
+)
+
+/**
+ * Formats a filter's `expires_at` timestamp (ISO 8601 offset) as a
+ * localized date and time for display; null when it cannot be parsed.
+ */
+internal fun formatExpiresAt(iso: String): String? = try {
+    val instant = java.time.OffsetDateTime.parse(iso).toInstant()
+    java.text.DateFormat.getDateTimeInstance(
+        java.text.DateFormat.MEDIUM,
+        java.text.DateFormat.SHORT,
+        java.util.Locale.getDefault(),
+    ).format(java.util.Date.from(instant))
+} catch (e: Exception) {
+    null
+}
+
 /**
  * Filter management, port of the web client's filters view on top of
  * `/api/v2/filters`. Lists the user's v2 filters, opens the editor on
@@ -108,7 +145,9 @@ fun FiltersScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    var editor by remember { mutableStateOf<EditorState?>(null) }
+    var editor by rememberSaveable(stateSaver = editorSaver) { mutableStateOf<EditorState?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf<FilterV2?>(null) }
 
     suspend fun reload() {
@@ -135,14 +174,14 @@ fun FiltersScreen(
             try {
                 action()
             } catch (e: ApiError) {
-                state = FiltersState.Content(previous)
+                state = stateAfterRevert(previous)
                 snackbarHostState.showSnackbar(
                     "Could not save the filter: the server returned error ${e.status}. The list was restored; try again.",
                 )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                state = FiltersState.Content(previous)
+                state = stateAfterRevert(previous)
                 snackbarHostState.showSnackbar(
                     "Could not save the filter: ${e.message ?: "network error"}. The list was restored; check your connection and try again.",
                 )
@@ -157,7 +196,10 @@ fun FiltersScreen(
             if (editorState.public) add("public")
             if (editorState.thread) add("thread")
         }
-        editor = null
+        // The editor stays open with a busy state until the request
+        // settles: closing early lost a typed filter on failure.
+        saving = true
+        saveError = null
         scope.launch {
             try {
                 val existingId = editorState.id
@@ -177,16 +219,16 @@ fun FiltersScreen(
                 val current = (state as? FiltersState.Content)?.items ?: emptyList()
                 val next = current.filterNot { it.id == saved.id } + saved
                 state = if (next.isEmpty()) FiltersState.Empty else FiltersState.Content(next.sortedBy { it.title })
+                saving = false
+                editor = null
             } catch (e: ApiError) {
-                snackbarHostState.showSnackbar(
-                    "Could not save the filter: the server returned error ${e.status}. Try again.",
-                )
+                saving = false
+                saveError = "Could not save the filter: the server returned error ${e.status}. Try again."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                snackbarHostState.showSnackbar(
-                    "Could not save the filter: ${e.message ?: "network error"}. Check your connection and try again.",
-                )
+                saving = false
+                saveError = "Could not save the filter: ${e.message ?: "network error"}. Check your connection and try again."
             }
         }
     }
@@ -282,9 +324,17 @@ fun FiltersScreen(
     editor?.let { current ->
         FilterEditorDialog(
             state = current,
-            onStateChange = { editor = it },
+            onStateChange = {
+                saveError = null
+                editor = it
+            },
+            saving = saving,
+            errorText = saveError,
             onSave = { save(current) },
-            onDismiss = { editor = null },
+            onDismiss = {
+                saveError = null
+                editor = null
+            },
         )
     }
 
@@ -349,7 +399,9 @@ private fun FilterRow(
             else -> name
         }
     }
-    val expiry = filter.expires_at?.takeIf { it.isNotBlank() }?.let { "Expires $it" }
+    val expiry = filter.expires_at?.takeIf { it.isNotBlank() }?.let { iso ->
+        formatExpiresAt(iso)?.let { "Expires $it" } ?: "Expires $iso"
+    }
     val subtitle = buildList {
         add("${actionLabel(filter.filter_action)} in $contextNames")
         add("${filter.keywords.size} keyword${if (filter.keywords.size == 1) "" else "s"}")
@@ -416,13 +468,15 @@ private fun FilterRow(
 private fun FilterEditorDialog(
     state: EditorState,
     onStateChange: (EditorState) -> Unit,
+    saving: Boolean,
+    errorText: String?,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val valid = state.title.isNotBlank() && state.keywords.any { it.keyword.isNotBlank() }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text(if (state.id == null) "Add filter" else "Edit filter") },
         text = {
@@ -519,22 +573,40 @@ private fun FilterEditorDialog(
                     Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("Add keyword", modifier = Modifier.padding(start = 4.dp))
                 }
+                errorText?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = onSave,
-                enabled = valid,
-                modifier = Modifier
-                    .heightIn(min = 48.dp)
-                    .semantics { contentDescription = "Save filter" },
-            ) {
-                Text("Save")
+            if (saving) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 12.dp)
+                        .size(24.dp)
+                        .semantics { contentDescription = "Saving filter" },
+                )
+            } else {
+                Button(
+                    onClick = onSave,
+                    enabled = valid,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = "Save filter" },
+                ) {
+                    Text("Save")
+                }
             }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
+                enabled = !saving,
                 modifier = Modifier
                     .heightIn(min = 48.dp)
                     .semantics { contentDescription = "Cancel editing filter" },
@@ -551,16 +623,23 @@ private fun ContextCheckbox(
     checked: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
+    // The whole row is the checkbox (Role.Checkbox); the Checkbox graphic
+    // is semantics-free so screen readers announce the row exactly once.
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClickLabel = "Toggle $label") { onChange(!checked) },
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = onChange,
+            )
+            .padding(vertical = 4.dp),
     ) {
         Checkbox(
             checked = checked,
-            onCheckedChange = onChange,
-            modifier = Modifier.semantics { contentDescription = label },
+            onCheckedChange = null,
         )
         Text(label, style = MaterialTheme.typography.bodyMedium)
     }

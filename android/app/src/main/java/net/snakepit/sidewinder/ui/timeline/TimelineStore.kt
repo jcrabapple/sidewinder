@@ -84,13 +84,17 @@ internal object TimelineStore {
 
     /** Replace [updated] wherever it appears, directly or inside a boost. */
     fun applyEdit(updated: Status) = mapAll { items ->
-        items.map { s ->
+        var changed = false
+        val next = items.map { s ->
             when {
-                s.id == updated.id -> updated
-                s.reblog?.id == updated.id -> s.copy(reblog = updated)
+                s.id == updated.id -> { changed = true; updated }
+                s.reblog?.id == updated.id -> { changed = true; s.copy(reblog = updated) }
                 else -> s
             }
         }
+        // Nothing matched: hand back the SAME list so mapAll skips the
+        // holder entirely instead of rewriting every holder's state.
+        if (changed) next else items
     }
 
     /** Remove a deleted status and any boosts of it. */
@@ -102,11 +106,20 @@ internal object TimelineStore {
     fun applyPosted(sessionId: String, status: Status) {
         if (status.in_reply_to_id != null) return
         val home = holders[key(sessionId, TimelineSource.Home)] ?: return
-        val current = home.state as? TimelineState.Content ?: return
-        if (current.items.any { it.id == status.id }) return
-        home.state = current.copy(items = listOf(status) + current.items)
-        // Keep the reader's place: the new row shifts everything down one.
-        if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
+        when (val current = home.state) {
+            is TimelineState.Content -> {
+                if (current.items.any { it.id == status.id }) return
+                home.state = current.copy(items = listOf(status) + current.items)
+                // Keep the reader's place: the new row shifts everything down one.
+                if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
+            }
+            // An empty (but finished) feed must not drop the post: the
+            // composer closed, so the user expects to see what they wrote.
+            TimelineState.Empty -> {
+                home.state = TimelineState.Content(listOf(status), nextMaxId = null, loadingMore = false)
+            }
+            else -> Unit
+        }
     }
 
     /**
@@ -128,7 +141,10 @@ internal object TimelineStore {
         for (holder in holders.values.toList()) {
             val current = holder.state as? TimelineState.Content ?: continue
             val next = transform(current.items)
-            if (next != current.items) {
+            // Assign only when the transform actually changed something:
+            // an unchanged list is returned by reference, so unaffected
+            // holders are not reassigned (no recomposition churn).
+            if (next !== current.items && next != current.items) {
                 holder.state = if (next.isEmpty() && current.nextMaxId == null) {
                     TimelineState.Empty
                 } else {

@@ -1,6 +1,9 @@
 package net.snakepit.sidewinder.core.oauth
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -12,6 +15,7 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.TokenResponse
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.network.NetworkError
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.io.File
 import java.util.UUID
@@ -24,6 +28,32 @@ const val ADMIN_SCOPES = "read write follow push admin"
 
 /** The redirect URI registered with the instance and declared in the manifest. */
 const val REDIRECT_URI = "sidewinder://oauth"
+
+/** How long a persisted pending sign-in stays usable after a process death. */
+internal const val PENDING_LOGIN_TTL_MS = 30 * 60_000L
+
+/** Outcome of verifying a stored OAuth client against the server. */
+internal enum class ClientCheck {
+    /** The server accepted the client-credentials grant; keep the client. */
+    Valid,
+    /** The server does not know this client (400/401); delete and re-register. */
+    Stale,
+    /** Anything else (server error, outage); keep credentials, fail the sign-in. */
+    Transient,
+}
+
+/**
+ * Classify an HTTP status from the client-credentials check. Pure so the
+ * stale-vs-outage decision is unit-testable: GTS answers 405 on
+ * POST /api/v1/apps/verify_credentials and 400 for an unknown client id on
+ * POST /oauth/token, so 400/401 mean a stale registration and every other
+ * failure must NOT destroy good credentials.
+ */
+internal fun classifyClientCheck(status: Int): ClientCheck = when {
+    status in 200..299 -> ClientCheck.Valid
+    status == 400 || status == 401 -> ClientCheck.Stale
+    else -> ClientCheck.Transient
+}
 
 /** App-registered OAuth client for one base+scope pair. Port of web ClientCredentials. */
 @Serializable
@@ -54,17 +84,25 @@ private fun clientKey(base: String, scopes: String): String = "$base::$scopes"
 private fun clientsFile(context: Context): File =
     File(context.filesDir, "sidewinder/clients.json")
 
-internal fun loadClients(context: Context): Map<String, ClientCredentials> {
+internal suspend fun loadClients(context: Context): Map<String, ClientCredentials> = withContext(Dispatchers.IO) {
     val f = clientsFile(context)
-    if (!f.exists()) return emptyMap()
-    return try {
+    if (!f.exists()) return@withContext emptyMap()
+    try {
         clientsJson.decodeFromString(clientsCodec, f.readText())
-    } catch (_: Exception) {
-        emptyMap()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // A corrupt or unreadable client store must not be silently
+        // replaced: re-registering would overwrite every other stored
+        // client. Surface the failure instead.
+        throw OauthException(
+            "Stored sign-in data is unreadable (${e.message ?: "corrupt file"}). " +
+                "Clear the app's storage and sign in again.",
+        )
     }
 }
 
-internal fun saveClients(context: Context, clients: Map<String, ClientCredentials>) {
+internal suspend fun saveClients(context: Context, clients: Map<String, ClientCredentials>) = withContext(Dispatchers.IO) {
     val dir = File(context.filesDir, "sidewinder")
     dir.mkdirs()
     val tmp = File(dir, "clients.json.tmp")
@@ -78,7 +116,7 @@ internal fun saveClients(context: Context, clients: Map<String, ClientCredential
     }
 }
 
-internal fun deleteClient(context: Context, base: String, scopes: String) {
+internal suspend fun deleteClient(context: Context, base: String, scopes: String) {
     val clients = loadClients(context).toMutableMap()
     clients.remove(clientKey(base, scopes))
     if (clients.isEmpty()) clientsFile(context).delete() else saveClients(context, clients)
@@ -88,6 +126,12 @@ internal fun deleteClient(context: Context, base: String, scopes: String) {
  * Return the stored client for base+scopes, verifying it still exists on the
  * server; otherwise register a new app via POST /api/v1/apps. A stored client
  * whose server-side row vanished is deleted and re-registered.
+ *
+ * The stored client is verified with the client-credentials grant
+ * (POST /oauth/token, grant_type=client_credentials) — the
+ * verify_credentials endpoint answers 405 on GTS, which cannot distinguish
+ * a stale client from an outage. The app token issued by the grant is
+ * discarded immediately.
  */
 suspend fun getOrCreateClient(
     context: Context,
@@ -99,20 +143,32 @@ suspend fun getOrCreateClient(
     if (existing != null) {
         try {
             Api(base).postForm(
-                "/api/v1/apps/verify_credentials",
-                mapOf("client_id" to existing.client_id, "client_secret" to existing.client_secret),
-                ClientCredentials.serializer(),
+                "/oauth/token",
+                mapOf(
+                    "grant_type" to "client_credentials",
+                    "client_id" to existing.client_id,
+                    "client_secret" to existing.client_secret,
+                    "redirect_uri" to REDIRECT_URI,
+                    "scope" to scopes,
+                ),
+                TokenResponse.serializer(),
             )
             return existing
         } catch (e: ApiError) {
             // Only a stale/unknown client row is worth discarding. A
             // server error must not destroy good credentials (an offline
             // blip would otherwise delete the registration every time).
-            if (e.status == 401 || e.status == 404) {
-                deleteClient(context, base, scopes)
-            } else {
-                throw OauthException("Could not verify the stored sign-in client: ${e.message} Try again later.")
+            when (classifyClientCheck(e.status)) {
+                ClientCheck.Valid -> return existing
+                ClientCheck.Stale -> deleteClient(context, base, scopes)
+                ClientCheck.Transient ->
+                    throw OauthException("Could not verify the stored sign-in client: ${e.message} Try again later.")
             }
+        } catch (e: NetworkError) {
+            throw OauthException(
+                "Could not reach the server to verify the stored sign-in client. " +
+                    "Check your connection and try again.",
+            )
         }
     }
     val created = try {
@@ -136,6 +192,7 @@ suspend fun getOrCreateClient(
 }
 
 /** Everything needed between "open browser" and the redirect. */
+@Serializable
 data class AuthorizeRequest(
     val base: String,
     val scopes: String,
@@ -143,6 +200,90 @@ data class AuthorizeRequest(
     val url: String,
     val state: String,
 )
+
+private val pendingLoginJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
+
+private fun pendingLoginFile(context: Context): File =
+    File(context.filesDir, "sidewinder/pending-login.json")
+
+/**
+ * Persist the in-flight sign-in so a process death while the user is in the
+ * Custom Tab does not kill the flow: the redirect handler falls back to this
+ * file when the in-memory copy is gone. Atomic temp+rename.
+ */
+internal suspend fun savePendingLogin(context: Context, request: AuthorizeRequest) =
+    withContext(Dispatchers.IO) {
+        val f = pendingLoginFile(context)
+        f.parentFile?.mkdirs()
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(
+            pendingLoginJson.encodeToString(
+                StoredAuthorizeRequest.serializer(),
+                StoredAuthorizeRequest(
+                    base = request.base,
+                    scopes = request.scopes,
+                    credentials = request.credentials,
+                    url = request.url,
+                    state = request.state,
+                    savedAtMs = System.currentTimeMillis(),
+                ),
+            ),
+        )
+        if (!tmp.renameTo(f)) {
+            f.delete()
+            if (!tmp.renameTo(f)) {
+                tmp.delete()
+                throw OauthException("Could not save the sign-in state. Free up storage and try again.")
+            }
+        }
+    }
+
+/**
+ * The persisted pending sign-in, or null when none exists or it is older
+ * than [PENDING_LOGIN_TTL_MS] (stale entries are removed).
+ */
+internal suspend fun loadPendingLogin(context: Context): AuthorizeRequest? = withContext(Dispatchers.IO) {
+    val f = pendingLoginFile(context)
+    if (!f.exists()) return@withContext null
+    try {
+        val stored = pendingLoginJson.decodeFromString(StoredAuthorizeRequest.serializer(), f.readText())
+        if (pendingLoginExpired(stored.savedAtMs, System.currentTimeMillis())) {
+            f.delete()
+            null
+        } else {
+            stored.toRequest()
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // Unreadable state is the same as no state: start the sign-in over.
+        f.delete()
+        null
+    }
+}
+
+/** Pure expiry rule for a persisted pending sign-in (30 minutes). */
+internal fun pendingLoginExpired(savedAtMs: Long, nowMs: Long): Boolean =
+    savedAtMs <= 0 || nowMs - savedAtMs > PENDING_LOGIN_TTL_MS
+
+internal suspend fun clearPendingLogin(context: Context) = withContext(Dispatchers.IO) {
+    pendingLoginFile(context).delete()
+}
+
+@Serializable
+private data class StoredAuthorizeRequest(
+    val base: String,
+    val scopes: String,
+    val credentials: ClientCredentials,
+    val url: String,
+    val state: String,
+    val savedAtMs: Long = 0,
+) {
+    fun toRequest() = AuthorizeRequest(base, scopes, credentials, url, state)
+}
 
 /** Build the /oauth/authorize URL the user opens in a browser (Custom Tab). */
 fun authorizeUrl(base: String, credentials: ClientCredentials, scopes: String = SCOPES): AuthorizeRequest {

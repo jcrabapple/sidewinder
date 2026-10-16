@@ -104,6 +104,8 @@ fun ProfileScreen(
 ) {
     var headerState by remember { mutableStateOf<HeaderState>(HeaderState.Loading) }
     var relationship by remember { mutableStateOf<Relationship?>(null) }
+    /** True when the relationship fetch failed; the follow button stays disabled until retried. */
+    var relError by remember { mutableStateOf(false) }
     var relBusy by remember { mutableStateOf(false) }
     var tabs by remember { mutableStateOf(emptyMap<ProfileRepository.StatusesTab, TabListState>()) }
     // Saved as its enum name so it survives process death via AutoSaver.
@@ -120,13 +122,25 @@ fun ProfileScreen(
     var muteDialogOpen by remember { mutableStateOf(false) }
     var noteDialogOpen by remember { mutableStateOf(false) }
 
+    /** Fetch the relationship; on failure keep the profile up with a null relationship (K36). */
+    suspend fun loadRelationshipSuspend() {
+        relationship = try {
+            ProfileRepository.relationship(api, accountId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            relError = true
+            null
+        }
+    }
+
     suspend fun loadAccount() {
         headerState = HeaderState.Loading
+        relError = false
         headerState = try {
+            // The account loads on its own: a relationship-fetch failure
+            // must not take the whole profile down (K36).
             val account = ProfileRepository.account(api, accountId)
-            if (!isSelf) {
-                relationship = ProfileRepository.relationship(api, accountId)
-            }
             HeaderState.Ready(account)
         } catch (e: ApiError) {
             HeaderState.Error("Could not load this profile: the server returned error ${e.status}. Check your connection, then retry.")
@@ -134,6 +148,25 @@ fun ProfileScreen(
             throw e
         } catch (e: Exception) {
             HeaderState.Error("Could not load this profile: ${e.message ?: "network error"}. Check your connection, then retry.")
+        }
+        if (headerState is HeaderState.Ready && !isSelf) {
+            loadRelationshipSuspend()
+        }
+    }
+
+    fun retryRelationship() {
+        if (relBusy) return
+        relError = false
+        relBusy = true
+        scope.launch {
+            try {
+                loadRelationshipSuspend()
+                if (relError) {
+                    snackbarHostState.showSnackbar("Could not load the follow state for this account. Use Retry to try again.")
+                }
+            } finally {
+                relBusy = false
+            }
         }
     }
 
@@ -163,8 +196,11 @@ fun ProfileScreen(
     }
 
     fun updateStatus(updated: Status) {
-        val current = tabs[selectedTab] ?: return
-        tabs = tabs + (selectedTab to current.copy(items = current.items.map { if (it.id == updated.id) updated else it }))
+        // Apply to every cached tab, including inside boost wrappers,
+        // so a favourite or edit on one tab cannot go stale on another (K37).
+        tabs = tabs.mapValues { (_, tabState) ->
+            tabState.copy(items = ProfileTabUpdates.updatedItems(tabState.items, updated))
+        }
     }
 
     fun loadNextPage() {
@@ -345,6 +381,8 @@ fun ProfileScreen(
                             isSelf = isSelf,
                             relationship = relationship,
                             relBusy = relBusy,
+                            relError = relError,
+                            onRetryRelationship = { retryRelationship() },
                             onToggleFollow = {
                                 val rel = relationship
                                 if (settings.confirmBeforeFollow && rel != null && !rel.following && !rel.requested) {
@@ -583,6 +621,8 @@ private fun ProfileHeader(
     isSelf: Boolean,
     relationship: Relationship?,
     relBusy: Boolean,
+    relError: Boolean = false,
+    onRetryRelationship: () -> Unit = {},
     onToggleFollow: () -> Unit,
     onMuteClick: (() -> Unit)? = null,
     onNoteClick: (() -> Unit)? = null,
@@ -650,6 +690,29 @@ private fun ProfileHeader(
                     }
                 }
             }
+        } else if (!isSelf && relError) {
+            // Relationship fetch failed (K36): the follow state is unknown,
+            // so the follow button stays disabled until the retry succeeds.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {},
+                    enabled = false,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = "Follow this account; the follow state is not loaded yet" },
+                ) {
+                    Text("Follow")
+                }
+                TextButton(
+                    onClick = onRetryRelationship,
+                    enabled = !relBusy,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = "Retry loading the follow state" },
+                ) {
+                    Text("Retry")
+                }
+            }
         }
 
         if (account.note.isNotBlank()) {
@@ -702,14 +765,18 @@ private fun ProfileHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        account.created_at.takeIf { it.isNotBlank() }?.let { joined ->
-            runCatching { OffsetDateTime.parse(joined) }.onSuccess { parsed ->
-                Text(
-                    text = "Joined ${parsed.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        // K38/G3-18: parse and format once per account, not per recomposition.
+        val joinedText = remember(account.created_at) {
+            account.created_at.takeIf { it.isNotBlank() }
+                ?.let { joined -> runCatching { OffsetDateTime.parse(joined) }.getOrNull() }
+                ?.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+        }
+        if (joinedText != null) {
+            Text(
+                text = "Joined $joinedText",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

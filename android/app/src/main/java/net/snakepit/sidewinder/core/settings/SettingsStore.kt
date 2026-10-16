@@ -78,9 +78,9 @@ class SettingsStore(context: Context) {
     /** Serializes read-modify-write cycles in [update]. */
     private val mutex = Mutex()
 
-    suspend fun settings(): AppSettings {
-        if (!file.exists()) return AppSettings()
-        return runCatching {
+    suspend fun settings(): AppSettings = withContext(Dispatchers.IO) {
+        if (!file.exists()) return@withContext AppSettings()
+        runCatching {
             val stored = json.decodeFromString(Stored.serializer(), file.readText())
             AppSettings(
                 theme = runCatching { ThemePref.valueOf(stored.theme) }.getOrDefault(ThemePref.SYSTEM),

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -146,11 +147,11 @@ private fun EditForm(
     var locked by rememberSaveable { mutableStateOf(account.locked) }
     var discoverable by rememberSaveable { mutableStateOf(account.discoverable ?: true) }
     var indexable by rememberSaveable { mutableStateOf(account.indexable ?: true) }
-    var avatarUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var avatarUri by rememberSaveable { mutableStateOf<android.net.Uri?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var avatarDescription by rememberSaveable { mutableStateOf("") }
-    var headerUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var headerUri by rememberSaveable { mutableStateOf<android.net.Uri?>(null) }
     var headerDescription by rememberSaveable { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
@@ -165,6 +166,8 @@ private fun EditForm(
     val dirty = displayName != account.display_name.orEmpty() ||
         note != account.note ||
         locked != account.locked ||
+        discoverable != (account.discoverable ?: true) ||
+        indexable != (account.indexable ?: true) ||
         avatarUri != null ||
         headerUri != null
 
@@ -309,25 +312,33 @@ private fun EditForm(
                             indexable = indexable,
                         )
                         // Image parts ride as multipart PATCH (avatar/header
-                        // are type:file on update_credentials).
-                        val headerBytes = withContext(Dispatchers.IO) {
+                        // are type:file on update_credentials). MIME and
+                        // extension come from the resolver's real type (K44).
+                        val headerUpload = withContext(Dispatchers.IO) {
                             headerUri?.let { uri ->
-                                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let { bytes ->
+                                    val (mediaType, filename) = imageUploadPart(context.contentResolver.getType(uri), "header")
+                                    Triple(bytes, mediaType, filename)
+                                }
                             }
                         }
-                        val avatarBytes = withContext(Dispatchers.IO) {
+                        val avatarUpload = withContext(Dispatchers.IO) {
                             avatarUri?.let { uri ->
-                                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }?.let { bytes ->
+                                    val (mediaType, filename) = imageUploadPart(context.contentResolver.getType(uri), "avatar")
+                                    Triple(bytes, mediaType, filename)
+                                }
                             }
                         }
-                        if (headerBytes != null) {
+                        if (headerUpload != null) {
+                            val (bytes, mediaType, filename) = headerUpload
                             api.upload(
                                 path = "/api/v1/accounts/update_credentials",
                                 serializer = Account.serializer(),
                                 fileField = "header",
-                                filename = "header.jpg",
-                                mediaType = "image/jpeg",
-                                bytes = headerBytes,
+                                filename = filename,
+                                mediaType = mediaType,
+                                bytes = bytes,
                                 fields = if (headerDescription.isNotBlank()) {
                                     mapOf("header_description" to headerDescription)
                                 } else {
@@ -336,14 +347,15 @@ private fun EditForm(
                                 method = "PATCH",
                             )
                         }
-                        if (avatarBytes != null) {
+                        if (avatarUpload != null) {
+                            val (bytes, mediaType, filename) = avatarUpload
                             api.upload(
                                 path = "/api/v1/accounts/update_credentials",
                                 serializer = Account.serializer(),
                                 fileField = "avatar",
-                                filename = "avatar.jpg",
-                                mediaType = "image/jpeg",
-                                bytes = avatarBytes,
+                                filename = filename,
+                                mediaType = mediaType,
+                                bytes = bytes,
                                 fields = if (avatarDescription.isNotBlank()) {
                                     mapOf("avatar_description" to avatarDescription)
                                 } else {
@@ -392,7 +404,9 @@ private fun ToggleRowEdit(title: String, body: String, checked: Boolean, onCheck
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .semantics { role = Role.Switch },
+            // K41: the whole row toggles with Switch semantics so screen
+            // readers announce it once.
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChecked),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -405,7 +419,7 @@ private fun ToggleRowEdit(title: String, body: String, checked: Boolean, onCheck
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChecked,
+            onCheckedChange = null,
             modifier = Modifier.clearAndSetSemantics { },
         )
     }

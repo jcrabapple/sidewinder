@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,14 +84,15 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
 import net.snakepit.sidewinder.core.filters.FilterCache
 import net.snakepit.sidewinder.core.filters.FilterEngine
 import net.snakepit.sidewinder.core.filters.FilterHit
-import net.snakepit.sidewinder.core.filters.FilterableText
 import net.snakepit.sidewinder.core.model.MediaAttachment
 import net.snakepit.sidewinder.core.model.Poll
 import net.snakepit.sidewinder.core.model.PreviewCard
@@ -98,14 +100,13 @@ import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.text.HtmlText
-import net.snakepit.sidewinder.core.text.htmlIsEmpty
+import net.snakepit.sidewinder.core.text.StatusText
 import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
 import net.snakepit.sidewinder.ui.app.shareText
 import net.snakepit.sidewinder.ui.media.MediaViewer
 import net.snakepit.sidewinder.ui.text.EmojiText
 import net.snakepit.sidewinder.ui.theme.LocalActionColors
-import org.jsoup.Jsoup
 
 /** Posts whose plain text exceeds this many characters collapse in feeds. */
 private const val COLLAPSE_THRESHOLD = 480
@@ -151,37 +152,80 @@ fun StatusCard(
     val settings = LocalAppSettings.current
 
     // Filter verdict: server-provided `filtered` first, client-side match
-    // over the cached v2 filters as fallback. "Show anyway" overrides it
-    // for the rest of this card's composition.
-    var filterHit by remember(inner.id, filterContext) { mutableStateOf<FilterHit?>(null) }
-    var filterRevealed by remember(inner.id) { mutableStateOf(false) }
-    LaunchedEffect(inner.id, filterContext) {
-        val context = filterContext ?: return@LaunchedEffect
-        val now = System.currentTimeMillis()
-        FilterEngine.verdict(inner.filtered, context, now)?.let {
-            filterHit = it
-            return@LaunchedEffect
-        }
-        val filters = runCatching { FilterCache.current(api, api.token ?: "") }.getOrDefault(emptyList())
-        val filterable = FilterableText(
-            text = Jsoup.parse(inner.content).text(),
-            spoiler = inner.spoiler_text,
-            pollOptions = inner.poll?.options?.map { it.title }.orEmpty(),
-            mediaDescriptions = inner.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+    // over the peeked v2 filters as fallback — both synchronously, so a
+    // hide/warn/blur-filtered post never renders its content first
+    // (K6). Only when the cache has never been populated does the
+    // suspend FilterCache.current run; until it resolves the card shows
+    // a neutral placeholder instead of the content. "Show anyway"
+    // overrides the verdict for the rest of this card's composition.
+    val token = api.token ?: ""
+    var filterHit: FilterHit? by remember(inner.id, filterContext) {
+        mutableStateOf(
+            filterContext?.let { context ->
+                StatusCardLogic.initialFilterHit(
+                    filtered = inner.filtered,
+                    contentHtml = inner.content,
+                    spoiler = inner.spoiler_text,
+                    pollOptions = inner.poll?.options?.map { it.title }.orEmpty(),
+                    mediaDescriptions = inner.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+                    peekedFilters = FilterCache.peek(token),
+                    context = context,
+                    nowMs = System.currentTimeMillis(),
+                )
+            },
         )
-        filterHit = FilterEngine.match(filters, filterable, context, now)
     }
+    // Pending = context applies, the server verdict did not settle it,
+    // and there is no peeked cache to match synchronously.
+    var filtersPending by remember(inner.id, filterContext) {
+        mutableStateOf(filterContext != null && filterHit == null && FilterCache.peek(token) == null)
+    }
+    LaunchedEffect(inner.id, filterContext, filtersPending) {
+        if (!filtersPending) return@LaunchedEffect
+        val context = filterContext ?: return@LaunchedEffect
+        try {
+            val filters = FilterCache.current(api, token)
+            val now = System.currentTimeMillis()
+            filterHit = withContext(Dispatchers.Default) {
+                FilterEngine.verdict(inner.filtered, context, now)
+                    ?: StatusCardLogic.clientMatch(
+                        filters,
+                        inner.content,
+                        inner.spoiler_text,
+                        inner.poll?.options?.map { it.title }.orEmpty(),
+                        inner.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+                        context,
+                        now,
+                    )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A failed filter fetch must not hide the post; leave it unfiltered.
+        }
+        filtersPending = false
+    }
+    var filterRevealed by remember(inner.id) { mutableStateOf(false) }
     val activeFilter = filterHit?.takeIf { !filterRevealed }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clickable {
+            .clickable(
+                onClickLabel = "Open thread",
+            ) {
                 // Body tap opens the displayed status, not the wrapper.
                 onOpenThread(inner.id)
             }
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+        if (filtersPending) {
+            // Verdict not resolvable yet (no peeked cache, fetch in
+            // flight): a neutral row instead of the content, so media
+            // and text of a possibly filtered post never load.
+            FilterPendingRow()
+            return@Column
+        }
         if (activeFilter?.action == "hide") {
             FilteredRow(hit = activeFilter, onShow = { filterRevealed = true })
             return@Column
@@ -252,11 +296,18 @@ fun StatusCard(
         }
 
         when (activeFilter?.action) {
-            "blur" -> FilterBlurredBlock(hit = activeFilter, onShow = { filterRevealed = true }, content = content)
-            "warn" -> {
-                FilterBanner(hit = activeFilter, onShow = { filterRevealed = true })
-                content()
-            }
+            // Below API 31 Modifier.blur is a no-op, so the content is
+            // not composed at all until revealed; on 31+ it composes
+            // blurred (and is hidden from accessibility either way).
+            "blur" -> FilterBlurredBlock(
+                hit = activeFilter,
+                onShow = { filterRevealed = true },
+                composeContent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+                content = content,
+            )
+            // Warn keeps the content hidden until "Show anyway" (Mastodon
+            // semantics; FilterBanner's KDoc says the same).
+            "warn" -> FilterBanner(hit = activeFilter, onShow = { filterRevealed = true })
             else -> content()
         }
 
@@ -326,9 +377,12 @@ private fun HeaderRow(status: Status, onOpenProfile: ((String) -> Unit)?) {
                 )
             }
         }
+        val stamp = remember(status.created_at, status.edited_at, relative) {
+            (if (relative) relativeTimestamp(status.created_at) else absoluteTimestamp(status.created_at)) +
+                if (status.edited_at != null) " \u00B7 edited" else ""
+        }
         Text(
-            text = (if (relative) relativeTimestamp(status.created_at) else absoluteTimestamp(status.created_at)) +
-                if (status.edited_at != null) " \u00B7 edited" else "",
+            text = stamp,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -377,11 +431,11 @@ private fun StatusContent(
     showMediaPreviews: Boolean = true,
     collapsible: Boolean = false,
 ) {
-    val hasBody = status.content.isNotBlank() && !htmlIsEmpty(status.content)
+    val hasBody = status.content.isNotBlank() && !StatusText.isEmptyHtml(status.content)
     // Long-post collapse (feeds only): plain-text length decides, expand
     // state persists in TimelineStore across scrolling and reloads.
     val isLong = collapsible && hasBody &&
-        remember(status.content) { Jsoup.parse(status.content).text().length > COLLAPSE_THRESHOLD }
+        remember(status.content) { StatusText.plain(status.content).length > COLLAPSE_THRESHOLD }
     var expanded by remember(status.id) { mutableStateOf(!isLong || TimelineStore.isExpanded(status.id)) }
     if (hasBody) {
         HtmlText(
@@ -804,11 +858,21 @@ private fun CountsRow(
     confirmBoostSetting: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    // The newest status at any moment: a revert must restore only the
+    // toggled field on THIS, not the click-time snapshot, or it clobbers
+    // concurrent edits that landed while the request was in flight (K9).
+    val latestInner by rememberUpdatedState(status.reblog ?: status)
+    val latestOuter by rememberUpdatedState(currentStatus)
     // Action currently in flight, so rapid taps cannot double-fire and a
     // second toggle cannot start before the first one settles.
     var pending by remember { mutableStateOf<String?>(null) }
     var confirmBoost by remember { mutableStateOf(false) }
     var boostContext by remember { mutableStateOf(false) }
+    // Press sources shared between the buttons and the bouncing modifier.
+    val replySource = remember { MutableInteractionSource() }
+    val boostSource = remember { MutableInteractionSource() }
+    val favouriteSource = remember { MutableInteractionSource() }
+    val bookmarkSource = remember { MutableInteractionSource() }
 
     fun toggle(action: String, label: String, active: Boolean) {
         if (pending != null) return
@@ -836,18 +900,20 @@ private fun CountsRow(
                     form = emptyMap(),
                     serializer = Status.serializer(),
                 ).let { it.reblog ?: it }
-                onStatusUpdated(mergeUpdated(currentStatus, fresh))
+                onStatusUpdated(mergeUpdated(latestOuter, fresh))
             } catch (e: ApiError) {
-                onStatusUpdated(currentStatus) // revert the optimistic change
+                // Revert only the toggled field on the latest status.
+                onStatusUpdated(mergeUpdated(latestOuter, StatusCardLogic.revertToggle(latestInner, action, active)))
                 onNotice("Could not $label: the server returned error ${e.status}. Try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                onStatusUpdated(currentStatus) // revert the optimistic change
+                onStatusUpdated(mergeUpdated(latestOuter, StatusCardLogic.revertToggle(latestInner, action, active)))
                 val reason = e.message ?: "network error"
                 onNotice("Could not $label: $reason. Check your connection and try again.")
+            } finally {
+                pending = null
             }
-            pending = null
         }
     }
 
@@ -858,6 +924,7 @@ private fun CountsRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
                 onClick = { onReply(status.id) },
+                interactionSource = replySource,
                 modifier = Modifier.semantics {
                     contentDescription =
                         if (hideCounts) "Reply" else "Reply, ${formatCount(status.replies_count)} replies"
@@ -866,7 +933,7 @@ private fun CountsRow(
                 Icon(
                     Icons.Outlined.ChatBubbleOutline,
                     contentDescription = null,
-                    modifier = Modifier.bouncing(),
+                    modifier = Modifier.bouncing(replySource),
                 )
             }
             if (!hideCounts && status.replies_count > 0) {
@@ -884,12 +951,13 @@ private fun CountsRow(
                 )
             }
             // One target for tap + long-press (IconButton has no
-            // onLongClick): Box carries both, 48dp preserved.
+            // onLongClick): Box carries both, 48dp preserved. The same
+            // interaction source feeds the press animation.
             Box(
                 modifier = Modifier
                     .size(48.dp)
                     .combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
+                        interactionSource = boostSource,
                         indication = androidx.compose.material3.ripple(bounded = false),
                         enabled = canBoost && pending == null,
                         role = Role.Button,
@@ -916,7 +984,7 @@ private fun CountsRow(
                     Icons.Outlined.Repeat,
                     contentDescription = null,
                     tint = if (status.reblogged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.bouncing().pulseOn(status.reblogged),
+                    modifier = Modifier.bouncing(boostSource).pulseOn(status.reblogged),
                 )
             }
         }
@@ -930,6 +998,7 @@ private fun CountsRow(
             IconButton(
                 onClick = { toggle("favourite", "favourite", status.favourited) },
                 enabled = pending == null,
+                interactionSource = favouriteSource,
                 modifier = Modifier.semantics {
                     contentDescription =
                         if (hideCounts) {
@@ -943,13 +1012,14 @@ private fun CountsRow(
                     if (status.favourited) Icons.Filled.Star else Icons.Outlined.StarBorder,
                     contentDescription = null,
                     tint = if (status.favourited) LocalActionColors.current.favourite else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.bouncing().pulseOn(status.favourited),
+                    modifier = Modifier.bouncing(favouriteSource).pulseOn(status.favourited),
                 )
             }
         }
         IconButton(
             onClick = { toggle("bookmark", "bookmark", status.bookmarked) },
             enabled = pending == null,
+            interactionSource = bookmarkSource,
             modifier = Modifier.semantics {
                 contentDescription = if (status.bookmarked) "Remove bookmark" else "Bookmark"
             },
@@ -958,7 +1028,7 @@ private fun CountsRow(
                 if (status.bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
                 contentDescription = null,
                 tint = if (status.bookmarked) LocalActionColors.current.bookmark else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.bouncing().pulseOn(status.bookmarked),
+                modifier = Modifier.bouncing(bookmarkSource).pulseOn(status.bookmarked),
             )
         }
         StatusMenu(status = status, onNotice = onNotice)
@@ -1118,6 +1188,13 @@ private fun formatCount(count: Long): String = when {
     else -> count.toString()
 }
 
+/** Absolute local date ("yyyy-MM-dd") for week-old-plus posts. */
+private val ABSOLUTE_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+
+/** Absolute local date + time ("Oct 16, 2026, 7:54 AM"), for the relative-times-off setting. */
+private val ABSOLUTE_DATE_TIME_FORMAT =
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+
 /**
  * Compact relative timestamp: "now", "3m", "5h", "4d"; anything older
  * than a week falls back to an absolute date, matching the web client.
@@ -1133,7 +1210,7 @@ internal fun relativeTimestamp(isoTimestamp: String): String {
         elapsed.toHours() < 1 -> "${elapsed.toMinutes()}m"
         elapsed.toDays() < 1 -> "${elapsed.toHours()}h"
         elapsed.toDays() < 7 -> "${elapsed.toDays()}d"
-        else -> parsed.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        else -> parsed.atZone(ZoneId.systemDefault()).format(ABSOLUTE_DATE_FORMAT)
     }
 }
 
@@ -1142,8 +1219,7 @@ internal fun absoluteTimestamp(isoTimestamp: String): String {
     val parsed: Instant = runCatching { OffsetDateTime.parse(isoTimestamp).toInstant() }
         .getOrElse { runCatching { Instant.parse(isoTimestamp) }.getOrNull() }
         ?: return isoTimestamp
-    return parsed.atZone(ZoneId.systemDefault())
-        .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+    return parsed.atZone(ZoneId.systemDefault()).format(ABSOLUTE_DATE_TIME_FORMAT)
 }
 
 /** Minimal row shown in place of a fully hidden (filter_action "hide") post. */
@@ -1202,9 +1278,27 @@ private fun FilterBanner(hit: FilterHit, onShow: () -> Unit) {
 
 /** Blur-scrim wrapper for blur-filtered posts; first tap reveals. */
 @Composable
-private fun FilterBlurredBlock(hit: FilterHit, onShow: () -> Unit, content: @Composable () -> Unit) {
+private fun FilterBlurredBlock(
+    hit: FilterHit,
+    onShow: () -> Unit,
+    composeContent: Boolean,
+    content: @Composable () -> Unit,
+) {
+    if (!composeContent) {
+        // Below API 31 Modifier.blur is a no-op, so the content is not
+        // composed at all. A lone matchParentSize overlay would measure to
+        // zero height (the post would vanish), so show the banner instead.
+        FilterBanner(hit = hit, onShow = onShow)
+        return
+    }
     Box {
-        Column(Modifier.blur(14.dp)) { content() }
+        if (composeContent) {
+            Column(
+                // The blurred content is unreadable by design; keep it out
+                // of the accessibility tree so TalkBack never reads it.
+                Modifier.blur(14.dp).clearAndSetSemantics { },
+            ) { content() }
+        }
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -1220,5 +1314,30 @@ private fun FilterBlurredBlock(hit: FilterHit, onShow: () -> Unit, content: @Com
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
+    }
+}
+
+/** Neutral row while the filter verdict is still being resolved. */
+@Composable
+private fun FilterPendingRow() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.FilterAlt,
+            contentDescription = null, // the text beside it carries the meaning
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Checking filters\u2026",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f).semantics {
+                contentDescription = "Checking this post against your filters"
+            },
+        )
     }
 }

@@ -43,7 +43,24 @@ data class AppSettings(
     val reduceMotion: Boolean = false,
     /** Live timeline streaming over WebSocket while the app is open. */
     val liveStreaming: Boolean = true,
+    /** Bundled color theme id (see AppThemes); unknown ids fall back to sidewinder. */
+    val themeId: String = "sidewinder",
+    /** Pure-black grounds in dark mode (legacy ThemePref.AMOLED migrated here). */
+    val pureBlack: Boolean = false,
 )
+
+/**
+ * Legacy ThemePref values meant MODE plus an AMOLED switch; AMOLED now
+ * decodes to mode DARK with pureBlack on. Top-level so unit tests can
+ * exercise the migration without an Android Context.
+ */
+internal fun migrateTheme(storedTheme: String, storedPureBlack: Boolean): Pair<ThemePref, Boolean> =
+    if (storedTheme == "AMOLED") {
+        ThemePref.DARK to true
+    } else {
+        val mode = runCatching { ThemePref.valueOf(storedTheme) }.getOrDefault(ThemePref.SYSTEM)
+        mode to storedPureBlack
+    }
 
 /**
  * JSON-file settings store at `filesDir/sidewinder/settings.json`, same
@@ -53,7 +70,7 @@ data class AppSettings(
 class SettingsStore(context: Context) {
 
     @Serializable
-    private data class Stored(
+    internal data class Stored(
         val theme: String = "SYSTEM",
         val relativeTimes: Boolean = true,
         val defaultVisibility: String = "public",
@@ -69,6 +86,8 @@ class SettingsStore(context: Context) {
         val textScale: Float = 1.0f,
         val reduceMotion: Boolean = false,
         val liveStreaming: Boolean = true,
+        val themeId: String = "sidewinder",
+        val pureBlack: Boolean = false,
     )
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -82,8 +101,10 @@ class SettingsStore(context: Context) {
         if (!file.exists()) return@withContext AppSettings()
         runCatching {
             val stored = json.decodeFromString(Stored.serializer(), file.readText())
+            val (mode, pureBlack) = migrateTheme(stored.theme, stored.pureBlack)
             AppSettings(
-                theme = runCatching { ThemePref.valueOf(stored.theme) }.getOrDefault(ThemePref.SYSTEM),
+                theme = mode,
+                pureBlack = pureBlack,
                 relativeTimes = stored.relativeTimes,
                 defaultVisibility = stored.defaultVisibility,
                 requireAltText = stored.requireAltText,
@@ -98,6 +119,7 @@ class SettingsStore(context: Context) {
                 textScale = stored.textScale,
                 reduceMotion = stored.reduceMotion,
                 liveStreaming = stored.liveStreaming,
+                themeId = stored.themeId,
             )
         }.getOrDefault(AppSettings())
     }
@@ -127,6 +149,8 @@ class SettingsStore(context: Context) {
                         textScale = next.textScale,
                         reduceMotion = next.reduceMotion,
                         liveStreaming = next.liveStreaming,
+                        themeId = next.themeId,
+                        pureBlack = next.pureBlack,
                     ),
                 ),
             )

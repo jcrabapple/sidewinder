@@ -55,13 +55,8 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.settings.AppSettings
 import net.snakepit.sidewinder.core.settings.SettingsStore
 import net.snakepit.sidewinder.core.settings.ThemePref
-
-private val themeLabels = mapOf(
-    ThemePref.SYSTEM to "System",
-    ThemePref.DARK to "Dark",
-    ThemePref.LIGHT to "Light",
-    ThemePref.AMOLED to "AMOLED black",
-)
+import net.snakepit.sidewinder.core.settings.migrateTheme
+import net.snakepit.sidewinder.ui.theme.AppThemes
 
 private val visibilityLabels = mapOf(
     "public" to "Public",
@@ -74,7 +69,7 @@ private val visibilityLabels = mapOf(
 internal val VALID_VISIBILITIES = visibilityLabels.keys
 
 /** Interface text-scale choices; 100% follows the system font size. */
-private val textScaleOptions = listOf(
+internal val textScaleOptions = listOf(
     0.8f to "80%",
     0.9f to "90%",
     1.0f to "100%",
@@ -83,7 +78,7 @@ private val textScaleOptions = listOf(
     1.3f to "130%",
 )
 
-private fun textScaleLabel(value: Float): String =
+internal fun textScaleLabel(value: Float): String =
     textScaleOptions.firstOrNull { it.first == value }?.second ?: "100%"
 
 /** Portable copy of the app settings for export/import (SAF JSON files). */
@@ -105,24 +100,33 @@ internal data class SettingsBackup(
     val reduceMotion: Boolean,
     /** Default true so files exported before live streaming existed keep it on. */
     val liveStreaming: Boolean = true,
+    /** Default keeps the Sidewinder look for backups made before theming. */
+    val themeId: String = "sidewinder",
+    /** Default false; legacy AMOLED in [theme] still migrates below. */
+    val pureBlack: Boolean = false,
 ) {
-    fun toSettings(): AppSettings = AppSettings(
-        theme = runCatching { ThemePref.valueOf(theme) }.getOrDefault(ThemePref.SYSTEM),
-        relativeTimes = relativeTimes,
-        defaultVisibility = if (defaultVisibility in VALID_VISIBILITIES) defaultVisibility else "public",
-        requireAltText = requireAltText,
-        backgroundNotifications = backgroundNotifications,
-        hideEngagementCounts = hideEngagementCounts,
-        confirmBeforeBoost = confirmBeforeBoost,
-        confirmBeforeFollow = confirmBeforeFollow,
-        hideMediaPreviews = hideMediaPreviews,
-        hideNoAltPosts = hideNoAltPosts,
-        collapseLongPosts = collapseLongPosts,
-        dynamicColor = dynamicColor,
-        textScale = textScale.coerceIn(0.8f, 1.3f),
-        reduceMotion = reduceMotion,
-        liveStreaming = liveStreaming,
-    )
+    fun toSettings(): AppSettings {
+        val (mode, migratedPureBlack) = migrateTheme(theme, pureBlack)
+        return AppSettings(
+            theme = mode,
+            pureBlack = migratedPureBlack,
+            relativeTimes = relativeTimes,
+            defaultVisibility = if (defaultVisibility in VALID_VISIBILITIES) defaultVisibility else "public",
+            requireAltText = requireAltText,
+            backgroundNotifications = backgroundNotifications,
+            hideEngagementCounts = hideEngagementCounts,
+            confirmBeforeBoost = confirmBeforeBoost,
+            confirmBeforeFollow = confirmBeforeFollow,
+            hideMediaPreviews = hideMediaPreviews,
+            hideNoAltPosts = hideNoAltPosts,
+            collapseLongPosts = collapseLongPosts,
+            dynamicColor = dynamicColor,
+            textScale = textScale.coerceIn(0.8f, 1.3f),
+            reduceMotion = reduceMotion,
+            liveStreaming = liveStreaming,
+            themeId = if (AppThemes.all.any { it.id == themeId }) themeId else "sidewinder",
+        )
+    }
 
     companion object {
         fun from(s: AppSettings) = SettingsBackup(
@@ -141,6 +145,8 @@ internal data class SettingsBackup(
             textScale = s.textScale,
             reduceMotion = s.reduceMotion,
             liveStreaming = s.liveStreaming,
+            themeId = s.themeId,
+            pureBlack = s.pureBlack,
         )
     }
 }
@@ -266,9 +272,13 @@ fun SettingsScreen(
             )
         }
 
-        ThemeRow(
-            current = loaded.theme,
-            onSelect = { theme -> apply { it.copy(theme = theme) } },
+        AppearanceSection(
+            settings = loaded,
+            onMode = { theme -> apply { it.copy(theme = theme) } },
+            onThemeId = { themeId -> apply { it.copy(themeId = themeId) } },
+            onDynamicColor = { value -> apply { it.copy(dynamicColor = value) } },
+            onPureBlack = { value -> apply { it.copy(pureBlack = value) } },
+            onTextScale = { value -> apply { it.copy(textScale = value) } },
         )
 
         ToggleRow(
@@ -339,22 +349,6 @@ fun SettingsScreen(
             checked = loaded.hideNoAltPosts,
             label = "Hide posts without alt text toggle",
             onCheckedChange = { value -> apply { it.copy(hideNoAltPosts = value) } },
-        )
-
-        ToggleRow(
-            title = "Dynamic colors",
-            subtitle = "Use your wallpaper colors on Android 12 and up. Off keeps the Sidewinder palette.",
-            checked = loaded.dynamicColor,
-            label = "Dynamic colors toggle",
-            onCheckedChange = { value -> apply { it.copy(dynamicColor = value) } },
-        )
-
-        DropdownSettingRow(
-            title = "Text size",
-            currentLabel = textScaleLabel(loaded.textScale),
-            contentDescription = "Choose the interface text size",
-            options = textScaleOptions,
-            onSelect = { value -> apply { it.copy(textScale = value) } },
         )
 
         ToggleRow(
@@ -598,21 +592,6 @@ fun SettingsScreen(
     }
 }
 
-/** Theme picker as an exposed dropdown (System / Dark / Light). */
-@Composable
-private fun ThemeRow(
-    current: ThemePref,
-    onSelect: (ThemePref) -> Unit,
-) {
-    DropdownSettingRow(
-        title = "Theme",
-        currentLabel = themeLabels.getValue(current),
-        contentDescription = "Theme, currently ${themeLabels.getValue(current).lowercase()}",
-        options = ThemePref.entries.map { it to themeLabels.getValue(it) },
-        onSelect = { pref -> onSelect(pref) },
-    )
-}
-
 /** Default visibility for new posts as an exposed dropdown. */
 @Composable
 private fun VisibilityRow(
@@ -631,7 +610,7 @@ private fun VisibilityRow(
 
 /** Shared dropdown row: a 48dp+ labeled field opening a menu of options. */
 @Composable
-private fun <T> DropdownSettingRow(
+internal fun <T> DropdownSettingRow(
     title: String,
     currentLabel: String,
     contentDescription: String,
@@ -686,12 +665,13 @@ private fun <T> DropdownSettingRow(
  *  cleared from the semantics tree, so screen readers announce the
  *  label and state exactly once. */
 @Composable
-private fun ToggleRow(
+internal fun ToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,
     label: String,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = Modifier
@@ -700,7 +680,8 @@ private fun ToggleRow(
             .toggleable(
                 value = checked,
                 role = Role.Switch,
-                onValueChange = onCheckedChange,
+                onValueChange = { if (enabled) onCheckedChange(it) },
+                enabled = enabled,
             )
             // Role.Switch on the toggleable row supplies the on/off state;
             // repeating it here makes screen readers announce state twice.

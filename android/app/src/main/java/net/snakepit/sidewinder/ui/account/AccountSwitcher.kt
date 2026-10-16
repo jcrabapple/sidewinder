@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import net.snakepit.sidewinder.core.model.Session
@@ -62,12 +63,11 @@ fun AccountSwitcher(
                 model = active?.account?.avatar_static?.ifEmpty { active.account.avatar }
                     ?: active?.account?.avatar,
                 contentDescription = "Switch account; signed in as ${active?.account?.acct ?: "nobody"}",
-                modifier = Modifier.size(28.dp),
-            )
-            Text(
-                "@${active?.account?.acct ?: ""}",
-                modifier = Modifier.padding(start = 8.dp),
-                maxLines = 1,
+                // Avatar only: the handle text crowded the brand title
+                // off the bar; the menu lists full handles.
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape),
             )
         }
     }

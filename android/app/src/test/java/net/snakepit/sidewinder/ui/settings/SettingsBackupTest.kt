@@ -3,6 +3,7 @@ package net.snakepit.sidewinder.ui.settings
 import kotlinx.serialization.json.Json
 import net.snakepit.sidewinder.core.settings.AppSettings
 import net.snakepit.sidewinder.core.settings.ThemePref
+import net.snakepit.sidewinder.ui.theme.AppThemes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,9 +40,11 @@ class SettingsBackupTest {
         val exported = json.encodeToString(SettingsBackup.serializer(), fullBackup(liveStreaming = false))
         val imported = json.decodeFromString(SettingsBackup.serializer(), exported)
         assertEquals(false, imported.toSettings().liveStreaming)
-        // The other fields ride along unchanged.
+        // The other fields ride along unchanged. Legacy AMOLED migrates to
+        // dark mode with pure black on.
         val restored = imported.toSettings()
-        assertEquals(ThemePref.AMOLED, restored.theme)
+        assertEquals(ThemePref.DARK, restored.theme)
+        assertTrue(restored.pureBlack)
         assertEquals("unlisted", restored.defaultVisibility)
         assertEquals(1.2f, restored.textScale)
     }
@@ -92,8 +95,39 @@ class SettingsBackupTest {
             textScale = 0.9f,
             reduceMotion = true,
             liveStreaming = false,
+            themeId = "catppuccin",
+            pureBlack = true,
         )
         val restored = SettingsBackup.from(settings).toSettings()
         assertEquals(settings, restored)
+    }
+
+    @Test
+    fun `old export file without theming fields defaults to sidewinder`() {
+        val oldJson = """
+            {"theme":"SYSTEM","relativeTimes":true,"defaultVisibility":"public",
+             "requireAltText":true,"backgroundNotifications":false,
+             "hideEngagementCounts":false,"confirmBeforeBoost":false,
+             "confirmBeforeFollow":false,"hideMediaPreviews":false,
+             "hideNoAltPosts":false,"collapseLongPosts":true,
+             "dynamicColor":false,"textScale":1.0,"reduceMotion":false,
+             "liveStreaming":true}
+        """.trimIndent()
+        val restored = json.decodeFromString(SettingsBackup.serializer(), oldJson).toSettings()
+        assertEquals("sidewinder", restored.themeId)
+        assertEquals(false, restored.pureBlack)
+    }
+
+    @Test
+    fun `unknown themeId falls back to sidewinder`() {
+        val backup = fullBackup(liveStreaming = true).copy(themeId = "not-a-theme")
+        assertEquals("sidewinder", backup.toSettings().themeId)
+    }
+
+    @Test
+    fun `every bundled theme id round-trips`() {
+        for (theme in AppThemes.all) {
+            assertEquals(theme.id, fullBackup(liveStreaming = true).copy(themeId = theme.id).toSettings().themeId)
+        }
     }
 }

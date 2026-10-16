@@ -15,12 +15,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 // Note: Compose theme ports the web client's `src/app.css` tokens
-// ("viper in the grass", hue-155 OKLCH) — keep palettes in sync when
+// ("viper in the grass", hue-155) — keep palettes in sync when
 // web tokens change. Converted values live in ui/theme/Color.kt.
 
 /**
  * Theme ported from the web client's tokens ("viper in the grass"):
  * hue-155 green accent on warm-neutral grounds, dark first-class.
+ * Bundled color themes live in ui/theme/palettes/ and resolve through
+ * [AppThemes.byId]; the Sidewinder palette is built from Color.kt.
  */
 
 /** Per-action accent colors from the web tokens (fav = hue 90, bookmark = hue 290). */
@@ -33,112 +35,33 @@ val LocalActionColors = staticCompositionLocalOf {
 /** True when the user asked for toned-down animations. */
 val LocalReduceMotion = staticCompositionLocalOf { false }
 
-private val Black = Color(0xFF000000)
-
-/** AMOLED variant: pure-black ground, same accents. */
-private val DarkAmoledColors = darkColorScheme(
-    primary = DarkAccent,
-    onPrimary = DarkOnAccent,
-    primaryContainer = DarkAccentContainer,
-    onPrimaryContainer = DarkAccentStrong,
-    secondary = DarkFgMuted,
-    onSecondary = DarkBg,
-    tertiary = DarkWarn,
-    onTertiary = DarkBg,
-    background = Black,
-    onBackground = DarkFg,
-    surface = Black,
-    onSurface = DarkFg,
-    surfaceVariant = DarkSurface2,
-    onSurfaceVariant = DarkFgMuted,
-    surfaceContainerLowest = Black,
-    surfaceContainerLow = Black,
-    surfaceContainer = DarkSurface2,
-    surfaceContainerHigh = DarkSurface2,
-    surfaceContainerHighest = DarkSurface3,
-    outline = DarkOutline,
-    outlineVariant = DarkOutlineVariant,
-    error = DarkDanger,
-    onError = Black,
-)
-
 /** Accent pair for dynamic-color schemes: derived from the scheme itself. */
 private fun actionColorsFor(scheme: ColorScheme) = ActionColors(scheme.primary, scheme.tertiary)
 
-private val DarkColors = darkColorScheme(
-    primary = DarkAccent,
-    onPrimary = DarkOnAccent,
-    primaryContainer = DarkAccentContainer,
-    onPrimaryContainer = DarkAccentStrong,
-    secondary = DarkFgMuted,
-    onSecondary = DarkBg,
-    tertiary = DarkWarn,
-    onTertiary = DarkBg,
-    background = DarkBg,
-    onBackground = DarkFg,
-    surface = DarkSurface,
-    onSurface = DarkFg,
-    surfaceVariant = DarkSurface2,
-    onSurfaceVariant = DarkFgMuted,
-    surfaceContainerLowest = DarkBg,
-    surfaceContainerLow = DarkSurface,
-    surfaceContainer = DarkSurface2,
-    surfaceContainerHigh = DarkSurface2,
-    surfaceContainerHighest = DarkSurface3,
-    outline = DarkOutline,
-    outlineVariant = DarkOutlineVariant,
-    error = DarkDanger,
-    onError = DarkBg,
-)
-
-private val LightColors = lightColorScheme(
-    primary = LightAccent,
-    onPrimary = LightOnAccent,
-    primaryContainer = LightAccentContainer,
-    onPrimaryContainer = LightAccentStrong,
-    secondary = LightFgMuted,
-    onSecondary = LightSurface,
-    tertiary = LightWarn,
-    onTertiary = LightSurface,
-    background = LightBg,
-    onBackground = LightFg,
-    surface = LightSurface,
-    onSurface = LightFg,
-    surfaceVariant = LightSurface2,
-    onSurfaceVariant = LightFgMuted,
-    surfaceContainerLowest = LightSurface,
-    surfaceContainerLow = LightBg,
-    surfaceContainer = LightSurface2,
-    surfaceContainerHigh = LightSurface2,
-    surfaceContainerHighest = LightSurface3,
-    outline = LightOutline,
-    outlineVariant = LightOutlineVariant,
-    error = LightDanger,
-    onError = LightSurface,
-)
-
 @Composable
 fun SidewinderTheme(
+    /** Bundled theme id; unknown ids fall back to Sidewinder. */
+    themeId: String = "sidewinder",
     darkTheme: Boolean = isSystemInDarkTheme(),
-    /** Material You wallpaper colors on Android 12+; false keeps the viper palette. */
+    /** Material You wallpaper colors on Android 12+; false keeps the theme palette. */
     dynamicColor: Boolean = false,
-    /** Pure-black dark variant (independent of [darkTheme], applied when dark). */
-    amoled: Boolean = false,
+    /** Pure-black grounds in dark mode (OLED). */
+    pureBlack: Boolean = false,
     /** Tone down animations; exposed to screens via [LocalReduceMotion]. */
     reduceMotion: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
     val dynamicAvailable = dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val theme = AppThemes.byId(themeId)
     val scheme = when {
         dynamicAvailable && darkTheme -> dynamicDarkColorScheme(context)
         dynamicAvailable -> dynamicLightColorScheme(context)
-        darkTheme && amoled -> DarkAmoledColors
-        darkTheme -> DarkColors
-        else -> LightColors
+        else -> theme.palette(darkTheme).toColorScheme(darkTheme, pureBlack)
     }
     val actions = if (dynamicAvailable) actionColorsFor(scheme) else {
-        if (darkTheme) ActionColors(DarkFav, DarkBookmark) else ActionColors(LightFav, LightBookmark)
+        val palette = theme.palette(darkTheme)
+        ActionColors(palette.favourite, palette.bookmark)
     }
     MaterialTheme(
         colorScheme = scheme,
@@ -152,3 +75,7 @@ fun SidewinderTheme(
         }
     }
 }
+
+/** Picks the light or dark variant of an [AppTheme]. */
+private fun AppTheme.palette(darkMode: Boolean): ThemePalette =
+    if (darkMode) dark else light

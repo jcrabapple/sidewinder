@@ -4,12 +4,14 @@ import android.content.Context
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
@@ -51,6 +53,8 @@ import net.snakepit.sidewinder.core.oauth.exchangeToken
 import net.snakepit.sidewinder.core.oauth.getOrCreateClient
 import net.snakepit.sidewinder.core.oauth.loadPendingLogin
 import net.snakepit.sidewinder.core.oauth.loginErrorMessage
+import net.snakepit.sidewinder.R
+import androidx.compose.ui.res.painterResource
 import net.snakepit.sidewinder.core.oauth.savePendingLogin
 
 /** The default server suggested on the sign-in screen. Same default as the web app. */
@@ -198,7 +202,13 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
             .verticalScroll(rememberScrollState())
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Image(
+            painter = painterResource(R.drawable.sidewinder_logo),
+            contentDescription = "Sidewinder logo",
+            modifier = Modifier.size(96.dp),
+        )
         Text("Sign in", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Enter your GoToSocial or Mastodon server address. Your browser opens to authorize Sidewinder.",

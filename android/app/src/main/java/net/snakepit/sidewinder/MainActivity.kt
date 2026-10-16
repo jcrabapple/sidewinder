@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
@@ -57,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,7 +70,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -78,6 +83,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import android.graphics.drawable.ColorDrawable
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import net.snakepit.sidewinder.R
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -310,11 +320,25 @@ private fun AppRoot(activity: MainActivity) {
         ThemePref.SYSTEM -> isSystemInDarkTheme()
     }
     SidewinderTheme(
+        themeId = settings.themeId,
         darkTheme = dark,
         dynamicColor = settings.dynamicColor,
-        amoled = settings.theme == ThemePref.AMOLED,
+        pureBlack = settings.pureBlack,
         reduceMotion = settings.reduceMotion,
     ) {
+      // The theme can now be light or dark regardless of the system; keep
+      // status/nav icons visible and repaint the window behind every theme.
+      val view = LocalView.current
+      val window = activity.window
+      val scheme = MaterialTheme.colorScheme
+      SideEffect {
+          val lightIcons = scheme.background.luminance() > 0.5f
+          WindowCompat.getInsetsController(window, view).apply {
+              isAppearanceLightStatusBars = lightIcons
+              isAppearanceLightNavigationBars = lightIcons
+          }
+          window.setBackgroundDrawable(ColorDrawable(scheme.background.toArgb()))
+      }
       val baseDensity = LocalDensity.current
       CompositionLocalProvider(
           LocalAppSettings provides settings,
@@ -524,11 +548,19 @@ private fun AppTabs(
                     // windowInsets would add that height a second time.
                     windowInsets = WindowInsets(0, 0, 0, 0),
                     title = {
-                        Text(
-                            "Sidewinder",
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painter = painterResource(R.drawable.sidewinder_logo),
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Sidewinder",
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
                     },
                     actions = {
                         IconButton(

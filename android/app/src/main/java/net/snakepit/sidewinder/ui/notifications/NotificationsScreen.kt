@@ -59,6 +59,8 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.notifications.NotificationsRepository
+import net.snakepit.sidewinder.core.stream.StreamEvent
+import net.snakepit.sidewinder.core.stream.StreamEventBus
 import net.snakepit.sidewinder.ui.timeline.relativeTimestamp
 import org.jsoup.Jsoup
 
@@ -87,12 +89,32 @@ enum class NotificationFilter {
 
     /** Only mentions (`types[]=mention`). */
     Mentions,
+
+    /** Only favourites (`types[]=favourite`). */
+    Favourites,
+
+    /** Only boosts (`types[]=reblog`). */
+    Boosts,
+
+    /** Follows and follow requests (`types[]=follow, follow_request`). */
+    Follows,
+
+    /** Only poll notifications (`types[]=poll`). */
+    Polls,
+
+    /** Only edited-post notifications (`types[]=update`). */
+    Edits,
 }
 
 /** Query parameter value for each filter; null means unfiltered. */
 private fun NotificationFilter.typesParam(): List<String>? = when (this) {
     NotificationFilter.All -> null
     NotificationFilter.Mentions -> listOf("mention")
+    NotificationFilter.Favourites -> listOf("favourite")
+    NotificationFilter.Boosts -> listOf("reblog")
+    NotificationFilter.Follows -> listOf("follow", "follow_request")
+    NotificationFilter.Polls -> listOf("poll")
+    NotificationFilter.Edits -> listOf("update")
 }
 
 /**
@@ -177,6 +199,22 @@ fun NotificationsScreen(
 
     LaunchedEffect(api, session.id, filter) { loadFirstPage() }
 
+    // Live notifications from the streaming socket, while this screen is
+    // composed. Only the unfiltered view prepends (a filtered query would
+    // not necessarily include the new type), and the read mark advances
+    // because the user is looking at the screen right now.
+    LaunchedEffect(api, session.id) {
+        StreamEventBus.events.collect { event ->
+            if (event !is StreamEvent.NotificationArrived) return@collect
+            if (filter != NotificationFilter.All) return@collect
+            val incoming = event.notification
+            val current = state as? NotificationsState.Content ?: return@collect
+            if (current.items.any { it.id == incoming.id }) return@collect
+            state = current.copy(items = listOf(incoming) + current.items)
+            onNewestLoaded(incoming.id)
+        }
+    }
+
     // Infinite scroll: trigger one page ahead of the last visible item.
     // Both the last visible index and the state are read inside the
     // snapshotFlow so a fresh page (or end of list) re-evaluates, and
@@ -230,6 +268,11 @@ fun NotificationsScreen(
                             text = when (filter) {
                                 NotificationFilter.All -> "No notifications yet. Mentions, favourites, boosts, and new followers will appear here."
                                 NotificationFilter.Mentions -> "No mentions yet. When someone mentions you, it will appear here."
+                                NotificationFilter.Favourites -> "No favourites yet. When someone favourites one of your posts, it will appear here."
+                                NotificationFilter.Boosts -> "No boosts yet. When someone boosts one of your posts, it will appear here."
+                                NotificationFilter.Follows -> "No follows yet. New followers and follow requests will appear here."
+                                NotificationFilter.Polls -> "No poll notifications yet. Polls you voted in will appear here when they close."
+                                NotificationFilter.Edits -> "No edited posts yet. Edits to posts you interacted with will appear here."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -274,29 +317,43 @@ private fun FilterChipRow(
     selected: NotificationFilter,
     onSelect: (NotificationFilter) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+    val chips = listOf(
+        NotificationFilter.All to "Show all notifications",
+        NotificationFilter.Mentions to "Show mentions only",
+        NotificationFilter.Favourites to "Show favourites only",
+        NotificationFilter.Boosts to "Show boosts only",
+        NotificationFilter.Follows to "Show follows and follow requests only",
+        NotificationFilter.Polls to "Show polls only",
+        NotificationFilter.Edits to "Show edited posts only",
+    )
+    androidx.compose.foundation.lazy.LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FilterChip(
-            selected = selected == NotificationFilter.All,
-            onClick = { onSelect(NotificationFilter.All) },
-            label = { Text("All") },
-            modifier = Modifier
-                .heightIn(min = 48.dp)
-                .semantics { contentDescription = "Show all notifications" },
-        )
-        FilterChip(
-            selected = selected == NotificationFilter.Mentions,
-            onClick = { onSelect(NotificationFilter.Mentions) },
-            label = { Text("Mentions") },
-            modifier = Modifier
-                .heightIn(min = 48.dp)
-                .semantics { contentDescription = "Show mentions only" },
-        )
+        items(chips.size, key = { chips[it].first.name }) { index ->
+            val (value, description) = chips[index]
+            FilterChip(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                label = { Text(value.label()) },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = description },
+            )
+        }
     }
+}
+
+/** Short chip label for a notification filter. */
+private fun NotificationFilter.label(): String = when (this) {
+    NotificationFilter.All -> "All"
+    NotificationFilter.Mentions -> "Mentions"
+    NotificationFilter.Favourites -> "Favourites"
+    NotificationFilter.Boosts -> "Boosts"
+    NotificationFilter.Follows -> "Follows"
+    NotificationFilter.Polls -> "Polls"
+    NotificationFilter.Edits -> "Edits"
 }
 
 /**

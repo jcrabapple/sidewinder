@@ -113,4 +113,21 @@ class TimelineStoreTest {
         // t0 was the least recently used of 13: it must have been evicted.
         assertTrue(first !== TimelineStore.holder("s1", TimelineSource.Hashtag("t0")))
     }
+
+    @Test
+    fun expandedStatePersistsAndClears() {
+        TimelineStore.setExpanded("s1", true)
+        assertTrue(TimelineStore.isExpanded("s1"))
+        TimelineStore.setExpanded("s1", false)
+        assertTrue(!TimelineStore.isExpanded("s1"))
+    }
+
+    @Test
+    fun expandedStateEvictsLeastRecentlyUsedPastTheCap() {
+        repeat(200) { TimelineStore.setExpanded("e$it", true) }
+        TimelineStore.setExpanded("e0", true) // touch e0: becomes most recently used
+        TimelineStore.setExpanded("fresh", true)
+        assertTrue(TimelineStore.isExpanded("e0"))
+        assertTrue(!TimelineStore.isExpanded("e1")) // oldest untouched entry evicted first
+    }
 }

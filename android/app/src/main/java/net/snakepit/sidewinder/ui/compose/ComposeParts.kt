@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Poll
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.WarningAmber
@@ -91,6 +92,17 @@ internal val VISIBILITY_OPTIONS = listOf(
 internal fun visibilityOption(value: String): VisibilityOption =
     VISIBILITY_OPTIONS.firstOrNull { it.value == value } ?: VISIBILITY_OPTIONS.first()
 
+/** Visibility reach rank; a reply may not be more public than its parent.
+ *  Unknown or server-specific values (local, mutuals_only) rank 0, which
+ *  leaves every option available and lets the server arbitrate. */
+internal fun visibilityRank(value: String): Int = when (value) {
+    "public" -> 0
+    "unlisted" -> 1
+    "private" -> 2
+    "direct" -> 3
+    else -> 0
+}
+
 /** The post being replied to, shown above the composer. */
 @Composable
 internal fun ReplyContext(parent: Status) {
@@ -143,11 +155,19 @@ internal fun AuthorRow(
     visibility: String,
     locked: Boolean,
     onVisibilityChange: (String) -> Unit,
+    /** Parent post's visibility while replying; the picker demotes only. */
+    parentVisibility: String? = null,
 ) {
     val account = session.account
     val host = remember(session.base) { session.base.substringAfter("://").substringBefore('/') }
     var menuOpen by remember { mutableStateOf(false) }
     val current = visibilityOption(visibility)
+    val maxRank = parentVisibility?.let { visibilityRank(it) }
+    val options = if (maxRank == null) {
+        VISIBILITY_OPTIONS
+    } else {
+        VISIBILITY_OPTIONS.filter { visibilityRank(it.value) >= maxRank }
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -200,7 +220,7 @@ internal fun AuthorRow(
                 }
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                VISIBILITY_OPTIONS.forEach { option ->
+                options.forEach { option ->
                     DropdownMenuItem(
                         leadingIcon = { Icon(option.icon, contentDescription = null) },
                         trailingIcon = {
@@ -456,6 +476,9 @@ internal fun ComposeToolbar(
     onTogglePoll: () -> Unit,
     cwOn: Boolean,
     onToggleCw: () -> Unit,
+    scheduleOn: Boolean = false,
+    onToggleSchedule: () -> Unit = {},
+    scheduleEnabled: Boolean = true,
     hasMedia: Boolean,
     sensitive: Boolean,
     onToggleSensitive: () -> Unit,
@@ -490,6 +513,14 @@ internal fun ComposeToolbar(
                     contentDescription = if (cwOn) "Remove content warning" else "Add a content warning"
                 },
             ) { Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = toggleTint(cwOn, true)) }
+            IconToggleButton(
+                checked = scheduleOn,
+                onCheckedChange = { onToggleSchedule() },
+                enabled = scheduleEnabled,
+                modifier = Modifier.semantics {
+                    contentDescription = if (scheduleOn) "Remove the schedule" else "Schedule this post"
+                },
+            ) { Icon(Icons.Outlined.Schedule, contentDescription = null, tint = toggleTint(scheduleOn, scheduleEnabled)) }
             if (hasMedia) {
                 IconToggleButton(
                     checked = sensitive,

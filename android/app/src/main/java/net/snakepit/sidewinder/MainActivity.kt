@@ -47,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -56,9 +57,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -87,6 +93,10 @@ import net.snakepit.sidewinder.core.settings.AppSettings
 import net.snakepit.sidewinder.core.settings.SettingsStore
 import net.snakepit.sidewinder.core.settings.ThemePref
 import net.snakepit.sidewinder.core.thread.ThreadRepository
+import net.snakepit.sidewinder.core.filters.FilterCache
+import net.snakepit.sidewinder.core.stream.StreamEvent
+import net.snakepit.sidewinder.core.stream.StreamEventBus
+import net.snakepit.sidewinder.core.stream.StreamingClient
 import net.snakepit.sidewinder.core.timeline.TimelineSource
 import net.snakepit.sidewinder.ui.account.AccountSwitcher
 import net.snakepit.sidewinder.ui.catchup.CatchUpScreen
@@ -94,18 +104,23 @@ import net.snakepit.sidewinder.ui.insights.InsightsScreen
 import net.snakepit.sidewinder.ui.lists.ListMembersScreen
 import net.snakepit.sidewinder.ui.lists.ListsScreen
 import net.snakepit.sidewinder.ui.moderation.ModerationScreen
+import net.snakepit.sidewinder.ui.mutes.MutesScreen
 import net.snakepit.sidewinder.ui.app.AppActions
 import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
 import net.snakepit.sidewinder.ui.app.openInBrowser
 import net.snakepit.sidewinder.ui.compose.ComposeScreen
+import net.snakepit.sidewinder.ui.dm.DmsScreen
+import net.snakepit.sidewinder.ui.filters.FiltersScreen
 import net.snakepit.sidewinder.ui.login.LoginScreen
 import net.snakepit.sidewinder.ui.login.handleOauthRedirect
 import net.snakepit.sidewinder.ui.notifications.NotificationsScreen
 import net.snakepit.sidewinder.ui.profile.AccountListScreen
+import net.snakepit.sidewinder.ui.profile.EditProfileScreen
 import net.snakepit.sidewinder.ui.profile.ProfileScreen
 import net.snakepit.sidewinder.ui.requests.FollowRequestsScreen
 import net.snakepit.sidewinder.ui.search.SearchScreen
+import net.snakepit.sidewinder.ui.schedule.ScheduledScreen
 import net.snakepit.sidewinder.ui.settings.SettingsScreen
 import net.snakepit.sidewinder.ui.theme.SidewinderTheme
 import net.snakepit.sidewinder.ui.thread.ThreadScreen
@@ -279,10 +294,23 @@ private fun AppRoot(activity: MainActivity) {
     val dark = when (settings.theme) {
         ThemePref.DARK -> true
         ThemePref.LIGHT -> false
+        ThemePref.AMOLED -> true
         ThemePref.SYSTEM -> isSystemInDarkTheme()
     }
-    SidewinderTheme(darkTheme = dark) {
-      CompositionLocalProvider(LocalAppSettings provides settings) {
+    SidewinderTheme(
+        darkTheme = dark,
+        dynamicColor = settings.dynamicColor,
+        amoled = settings.theme == ThemePref.AMOLED,
+        reduceMotion = settings.reduceMotion,
+    ) {
+      val baseDensity = LocalDensity.current
+      CompositionLocalProvider(
+          LocalAppSettings provides settings,
+          LocalDensity provides Density(
+              density = baseDensity.density,
+              fontScale = baseDensity.fontScale * settings.textScale.coerceIn(0.8f, 1.3f),
+          ),
+      ) {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
                 val active = session
@@ -366,6 +394,55 @@ private fun AppTabs(
     val reselect = remember { MutableSharedFlow<String>(extraBufferCapacity = 1) }
     val homeReselect = remember { reselect.filter { it == TopLevel.Home.route }.map { } }
 
+    // Live streaming (foreground only): the user stream carries home-timeline
+    // updates AND notifications for this session. Events patch the cached
+    // feeds directly and reach the open notifications screen via the bus;
+    // the 15-minute poll worker keeps covering background badge counts.
+    var streamingClient by remember { mutableStateOf<StreamingClient?>(null) }
+    fun restartStreaming(live: Boolean) {
+        streamingClient?.stop()
+        streamingClient = null
+        if (!live) return
+        StreamingClient(
+            baseUrl = session.base,
+            token = session.token,
+            scope = scope,
+            onEvent = { event ->
+                when (event) {
+                    is StreamEvent.StatusUpdate -> TimelineStore.applyStreamed(session.id, event.status)
+                    is StreamEvent.StatusDeleted -> TimelineStore.applyDelete(event.statusId)
+                    is StreamEvent.NotificationArrived -> StreamEventBus.publish(event)
+                    is StreamEvent.FiltersChanged -> FilterCache.invalidate(session.token)
+                }
+            },
+            onConnectionState = { },
+        ).also { client ->
+            streamingClient = client
+            client.start()
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val streamingEnabled = LocalAppSettings.current.liveStreaming
+    DisposableEffect(lifecycleOwner, session.id, streamingEnabled) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> if (streamingEnabled) restartStreaming(true)
+                Lifecycle.Event.ON_STOP -> restartStreaming(false)
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        // The activity may already be resumed when this effect first composes.
+        if (streamingEnabled && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            restartStreaming(true)
+        }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            restartStreaming(false)
+        }
+    }
+
     // In-app link routing for every StatusCard / HtmlText below.
     val actions = remember(nav, api, session.account.id) {
         AppActions(
@@ -395,6 +472,7 @@ private fun AppTabs(
             openUrl = { url -> openInBrowser(context, url) },
             selfAccountId = session.account.id,
             openEdit = { id -> nav.navigate("compose?edit=$id") },
+            openEditProfile = { nav.navigate("edit_profile") },
         )
     }
 
@@ -572,6 +650,7 @@ private fun AppTabs(
                             onCompose = openCompose,
                             source = HOME_FEEDS[feed].second,
                             scrollToTop = homeReselect,
+                            showDisplayFilters = true,
                         )
                     }
                 }
@@ -612,6 +691,10 @@ private fun AppTabs(
                         onSettingsChanged = onSettingsChanged,
                         onOpenModeration = { nav.navigate("moderation") },
                         onOpenLists = { nav.navigate("lists") },
+                        onOpenFilters = { nav.navigate("filters") },
+                        onOpenMutes = { nav.navigate("mutes") },
+                        onOpenScheduled = { nav.navigate("scheduled") },
+                        onOpenDms = { nav.navigate("dm") },
                     )
                 }
             }
@@ -839,6 +922,31 @@ private fun AppTabs(
                     ModerationScreen(api = api, session = session)
                 }
             }
+            composable("filters") {
+                key(session.id) {
+                    FiltersScreen(api = api, session = session)
+                }
+            }
+            composable("mutes") {
+                key(session.id) {
+                    MutesScreen(api = api, session = session, onOpenProfile = openProfile)
+                }
+            }
+            composable("scheduled") {
+                key(session.id) {
+                    ScheduledScreen(api = api, session = session)
+                }
+            }
+            composable("dm") {
+                key(session.id) {
+                    DmsScreen(api = api, session = session, onOpenThread = openThread)
+                }
+            }
+            composable("edit_profile") {
+                key(session.id) {
+                    EditProfileScreen(api = api, session = session, onSaved = { nav.popBackStack() })
+                }
+            }
             composable("tag/{name}") { entry ->
                 val name = entry.arguments?.getString("name")
                 if (name == null) {
@@ -876,6 +984,11 @@ private fun subScreenTitle(route: String?, args: Bundle?): String? = when (route
     "profile/{id}" -> "Profile"
     "profile/{id}/{kind}" -> if (args?.getString("kind") == "following") "Following" else "Followers"
     "follow_requests" -> "Follow requests"
+    "filters" -> "Filters"
+    "mutes" -> "Muted accounts"
+    "scheduled" -> "Scheduled posts"
+    "dm" -> "Direct messages"
+    "edit_profile" -> "Edit profile"
     "bookmarks" -> "Bookmarks"
     "favourites" -> "Favourites"
     "tag/{name}" -> "#" + (args?.getString("name") ?: "")

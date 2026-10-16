@@ -84,4 +84,32 @@ object ProfileRepository {
      *  request. GTS 405s the DELETE /follow variant. */
     suspend fun unfollow(api: Api, id: String): Relationship =
         api.postForm("/api/v1/accounts/$id/unfollow", emptyMap(), Relationship.serializer())
+
+    /**
+     * PATCH /api/v1/accounts/update_credentials — profile fields as form
+     * params (the endpoint is formData, JSON is not bound). Image changes
+     * need file uploads, which go through a separate multipart call by the
+     * caller; this handles the text/flag fields only.
+     */
+    suspend fun updateCredentials(
+        api: Api,
+        displayName: String? = null,
+        note: String? = null,
+        locked: Boolean? = null,
+        discoverable: Boolean? = null,
+        indexable: Boolean? = null,
+    ): Account {
+        val form = buildMap {
+            displayName?.let { put("display_name", it) }
+            note?.let { put("note", it) }
+            locked?.let { put("locked", it.toString()) }
+            discoverable?.let { put("discoverable", it.toString()) }
+            indexable?.let { put("indexable", it.toString()) }
+        }
+        return api.patchForm(
+            path = "/api/v1/accounts/update_credentials",
+            form = form,
+            serializer = Account.serializer(),
+        )
+    }
 }

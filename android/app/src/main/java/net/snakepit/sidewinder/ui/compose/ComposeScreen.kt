@@ -8,6 +8,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,23 +19,32 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDialog
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -42,6 +53,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +61,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -60,6 +73,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -83,10 +97,15 @@ import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.network.NetworkError
+import net.snakepit.sidewinder.core.schedule.ScheduledStatus
 import net.snakepit.sidewinder.core.thread.ThreadRepository
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
+import net.snakepit.sidewinder.ui.schedule.isoFromMillis
+import net.snakepit.sidewinder.ui.schedule.scheduledAtLabel
 import net.snakepit.sidewinder.ui.timeline.TimelineStore
 import org.jsoup.Jsoup
+import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 
 internal const val CHAR_LIMIT = 5000
@@ -171,6 +190,13 @@ fun ComposeScreen(
     val pollOptions = remember { mutableStateListOf("", "") }
     var pollMultiple by rememberSaveable { mutableStateOf(false) }
     var pollExpiry by rememberSaveable { mutableLongStateOf(86_400L) }
+    var scheduleOn by rememberSaveable { mutableStateOf(false) }
+    var scheduleAtMs by rememberSaveable { mutableLongStateOf(0L) }
+    /** Date picked in the date step; scheduleAtMs is set only after the time validates. */
+    var scheduleDateMs by rememberSaveable { mutableLongStateOf(0L) }
+    /** 0 = no picker open, 1 = date step, 2 = time step. */
+    var schedulePickerStep by rememberSaveable { mutableIntStateOf(0) }
+    var scheduleError by remember { mutableStateOf<String?>(null) }
     var posting by rememberSaveable { mutableStateOf(false) }
     var pendingAltConfirm by rememberSaveable { mutableStateOf(false) }
     var altDialogKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -236,6 +262,8 @@ fun ComposeScreen(
                 pollOptions.addAll(draft.pollOptions.ifEmpty { listOf("", "") })
                 pollMultiple = draft.pollMultiple
                 pollExpiry = draft.pollExpiry
+                scheduleOn = draft.scheduleOn
+                scheduleAtMs = draft.scheduledAtMs
                 media.addAll(draft.media.map { DraftMedia(key = UUID.randomUUID().toString(), attachment = it.attachment) })
             }
         }
@@ -266,6 +294,8 @@ fun ComposeScreen(
                 pollOptions = pollOptions.toList(),
                 pollMultiple = pollMultiple,
                 pollExpiry = pollExpiry,
+                scheduleOn = scheduleOn,
+                scheduledAtMs = scheduleAtMs,
                 savedAt = System.currentTimeMillis(),
             ),
         )
@@ -274,6 +304,7 @@ fun ComposeScreen(
     LaunchedEffect(
         draftReady, text, cwOn, spoiler, visibility,
         pollOn, pollMultiple, pollExpiry, keyPollOptions,
+        scheduleOn, scheduleAtMs,
         media.size, media.count { it.attachment != null },
     ) {
         if (!draftReady || mode != ComposeMode.New || posting) return@LaunchedEffect
@@ -372,16 +403,18 @@ fun ComposeScreen(
     val readyItems = media.filter { it.attachment != null }
     val missingAlt = readyItems.count { it.attachment?.description.isNullOrBlank() }
     val pollInvalid = pollOn && (pollOptions.count { it.isNotBlank() } < 2 || pollOptions.any { it.length > POLL_OPTION_LIMIT })
+    val scheduleIncomplete = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs == 0L
     val hasContent = text.isNotBlank() || media.isNotEmpty()
     val dirty = draftReady && fingerprint() != baseline
     // GoToSocial answers an edit that changes nothing with HTTP 422, so
     // Save stays disabled until the edit actually differs.
-    val canPost = draftReady && !posting && hasContent && !overLimit && !pollInvalid &&
+    val canPost = draftReady && !posting && hasContent && !overLimit && !pollInvalid && !scheduleIncomplete &&
         media.none { it.error != null } && (mode != ComposeMode.Edit || dirty)
 
     fun submit() {
         posting = true
         pendingAltConfirm = false
+        val scheduling = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs > 0
         scope.launch {
             try {
                 // Wait for in-flight uploads before building the request.
@@ -422,29 +455,63 @@ fun ComposeScreen(
                             put("multiple", pollMultiple)
                         }
                     }
+                    if (scheduling) {
+                        // GTS: future scheduled_at queues a ScheduledStatus;
+                        // it must be at least 5 minutes ahead.
+                        put("scheduled_at", isoFromMillis(scheduleAtMs))
+                    }
                 }
-                val result = if (mode == ComposeMode.Edit && editing != null) {
-                    ThreadRepository.edit(api, editing.id, payload).also { TimelineStore.applyEdit(it) }
+                if (mode == ComposeMode.Edit && editing != null) {
+                    val edited = ThreadRepository.edit(api, editing.id, payload)
+                    TimelineStore.applyEdit(edited)
+                    keyboard?.hide()
+                    onPosted(edited)
+                } else if (scheduling) {
+                    // The response is a ScheduledStatus, not a Status: nothing
+                    // lands in the timeline yet, so no applyPosted call.
+                    val scheduled = api.request(
+                        path = "/api/v1/statuses",
+                        serializer = ScheduledStatus.serializer(),
+                        method = "POST",
+                        body = payload,
+                        headers = mapOf("Idempotency-Key" to UUID.randomUUID().toString()),
+                    )
+                    if (mode == ComposeMode.New) draftStore.clear(session.id)
+                    keyboard?.hide()
+                    snackbar.showSnackbar(
+                        "Scheduled for ${scheduledAtLabel(scheduled.scheduled_at)}.",
+                        duration = SnackbarDuration.Short,
+                    )
+                    onDismiss()
                 } else {
-                    api.request(
+                    val posted = api.request(
                         path = "/api/v1/statuses",
                         serializer = Status.serializer(),
                         method = "POST",
                         body = payload,
                         headers = mapOf("Idempotency-Key" to UUID.randomUUID().toString()),
-                    ).also { TimelineStore.applyPosted(session.id, it) }
+                    )
+                    TimelineStore.applyPosted(session.id, posted)
+                    keyboard?.hide()
+                    onPosted(posted)
                 }
-                if (mode == ComposeMode.New) draftStore.clear(session.id)
-                keyboard?.hide()
-                onPosted(result)
+                if (mode == ComposeMode.New && !scheduling) draftStore.clear(session.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiError) {
-                val what = if (mode == ComposeMode.Edit) "Saving your edit" else "Posting"
+                val what = when {
+                    mode == ComposeMode.Edit -> "Saving your edit"
+                    scheduling -> "Scheduling"
+                    else -> "Posting"
+                }
                 val reason = serverReason(e)?.let { ": $it" } ?: " (server error ${e.status})"
                 showError("$what failed$reason. Nothing was lost; try again.")
             } catch (e: Exception) {
-                val what = if (mode == ComposeMode.Edit) "Saving your edit" else "Posting"
+                val what = when {
+                    mode == ComposeMode.Edit -> "Saving your edit"
+                    scheduling -> "Scheduling"
+                    else -> "Posting"
+                }
                 showError("$what failed: ${e.message ?: "no connection"}. Nothing was lost; try again.")
             } finally {
                 posting = false
@@ -531,6 +598,13 @@ fun ComposeScreen(
                 onTogglePoll = { pollOn = !pollOn },
                 cwOn = cwOn,
                 onToggleCw = { cwOn = !cwOn },
+                scheduleOn = scheduleOn,
+                onToggleSchedule = {
+                    scheduleOn = !scheduleOn
+                    scheduleError = null
+                    if (scheduleOn) schedulePickerStep = 1
+                },
+                scheduleEnabled = mode != ComposeMode.Edit && !posting,
                 hasMedia = media.isNotEmpty(),
                 sensitive = markSensitive || (cwOn && spoiler.isNotBlank()),
                 onToggleSensitive = { markSensitive = !markSensitive },
@@ -555,7 +629,54 @@ fun ComposeScreen(
                 visibility = visibility,
                 locked = mode == ComposeMode.Edit,
                 onVisibilityChange = { visibility = it },
+                parentVisibility = replyTo?.takeIf { mode == ComposeMode.Reply }?.visibility,
             )
+
+            if (mode != ComposeMode.Edit && scheduleOn) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Outlined.Schedule,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (scheduleAtMs > 0) {
+                            "Scheduled for ${scheduledAtLabel(isoFromMillis(scheduleAtMs))}"
+                        } else {
+                            "Pick a time to schedule this post."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (scheduleAtMs > 0) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (scheduleAtMs > 0) {
+                        TextButton(
+                            onClick = { schedulePickerStep = 1 },
+                            modifier = Modifier.semantics { contentDescription = "Change the scheduled time" },
+                        ) { Text("Change") }
+                        TextButton(
+                            onClick = {
+                                scheduleOn = false
+                                scheduleAtMs = 0
+                                scheduleDateMs = 0
+                                scheduleError = null
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Remove the schedule" },
+                        ) { Text("Clear") }
+                    }
+                }
+            }
 
             if (cwOn) {
                 TextField(
@@ -635,6 +756,95 @@ fun ComposeScreen(
                 }
             }
             HorizontalDivider(color = Color.Transparent, modifier = Modifier.padding(bottom = 24.dp))
+        }
+    }
+
+    // ---- Schedule pickers: date, then time (min 5 minutes ahead) ----
+    if (schedulePickerStep == 1) {
+        val dateState = rememberDatePickerState(
+            initialSelectedDateMillis = when {
+                scheduleDateMs > 0 -> scheduleDateMs
+                scheduleAtMs > 0 -> scheduleAtMs
+                else -> System.currentTimeMillis() + 3_600_000L
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { schedulePickerStep = 0 },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val picked = dateState.selectedDateMillis
+                        if (picked != null) {
+                            scheduleDateMs = picked
+                            scheduleError = null
+                            schedulePickerStep = 2
+                        }
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Confirm the scheduled date" },
+                ) { Text("Next") }
+            },
+            dismissButton = { TextButton(onClick = { schedulePickerStep = 0 }) { Text("Cancel") } },
+        ) {
+            DatePicker(state = dateState)
+        }
+    }
+    if (schedulePickerStep == 2 && scheduleDateMs > 0) {
+        // DatePicker returns UTC-midnight millis for the picked calendar date;
+        // derive the date in UTC so the calendar day survives any timezone.
+        val pickedDate = Instant.ofEpochMilli(scheduleDateMs).atZone(ZoneId.of("UTC")).toLocalDate()
+        val priorTime = if (scheduleError == null && scheduleAtMs > 0) {
+            // scheduleAtMs is a validated real instant; show its wall-clock in
+            // the user's zone. UTC extraction is only for raw DatePicker millis.
+            Instant.ofEpochMilli(scheduleAtMs).atZone(ZoneId.systemDefault()).toLocalTime()
+        } else {
+            null
+        }
+        val timeState = rememberTimePickerState(
+            initialHour = priorTime?.hour ?: 12,
+            initialMinute = priorTime?.minute ?: 0,
+            is24Hour = false,
+        )
+        TimePickerDialog(
+            onDismissRequest = { schedulePickerStep = 0 },
+            title = { Text("Pick a time") },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val candidate = pickedDate
+                            .atTime(timeState.hour, timeState.minute)
+                            .atZone(ZoneId.systemDefault())
+                            .toInstant()
+                            .toEpochMilli()
+                        if (candidate >= System.currentTimeMillis() + 5 * 60_000L) {
+                            scheduleAtMs = candidate
+                            scheduleError = null
+                            schedulePickerStep = 0
+                        } else {
+                            scheduleError = "Scheduled posts must be at least 5 minutes in the future. Pick a later time."
+                        }
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Confirm the scheduled time" },
+                ) { Text("Set time") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    scheduleError = null
+                    schedulePickerStep = 1
+                }) { Text("Back") }
+            },
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                TimePicker(state = timeState)
+                scheduleError?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
         }
     }
 

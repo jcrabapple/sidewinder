@@ -22,7 +22,7 @@ object ModerationRepository {
 
     // ---- Payload shapes (subsets of the GTS admin models) ----
 
-    /** Embedded account card in admin payloads. */
+    /** Embedded account card in admin payloads (reports). */
     @Serializable
     data class AdminAccountInfo(
         val id: String,
@@ -35,20 +35,34 @@ object ModerationRepository {
         val suspended: Boolean? = null,
     )
 
-    /** Admin account row (v1 signup shape). */
+    /**
+     * Admin account row: GTS returns the flat adminAccountInfo shape —
+     * no nested account object (nested `account` broke the decode, which
+     * is why Signups never loaded). Display fields are resolved from the
+     * embedded [account] card when present, else the username/domain.
+     */
     @Serializable
     data class AdminAccount(
         val id: String,
         val username: String,
         val domain: String? = null,
         val email: String? = null,
-        val reason: String? = null,
         val invite_request: String? = null,
         val created_at: String = "",
         val confirmed: Boolean = false,
         val approved: Boolean = false,
-        val account: AdminAccountInfo,
-    )
+        val disabled: Boolean = false,
+        val silenced: Boolean = false,
+        val suspended: Boolean = false,
+        val account: AdminAccountInfo? = null,
+    ) {
+        val acct: String
+            get() = account?.acct ?: if (domain == null) username else "$username@$domain"
+        val displayName: String
+            get() = account?.display_name?.takeIf { it.isNotBlank() } ?: username
+        val avatarUrl: String?
+            get() = account?.avatar_static ?: account?.avatar
+    }
 
     /** GTS AdminReport. */
     @Serializable
@@ -92,22 +106,24 @@ object ModerationRepository {
         val created_at: String = "",
     )
 
-    /** The signup reason shown to the admin: invite note, else account reason. */
+    /** The signup reason shown to the admin: the invite_request field. */
     fun signupReason(a: AdminAccount): String =
-        (a.invite_request ?: a.reason ?: "").trim()
+        (a.invite_request ?: "").trim()
 
     // ---- Signups ----
 
     /**
-     * Accounts waiting on approval. The GTS `status=pending` filter returns
-     * some internal rows (confirmed:false/approved:false), so filter to real
-     * humans: local, unconfirmed, unapproved, and not the instance actor.
+     * Accounts waiting on approval. The correct filter param is
+     * `pending=true` (swagger adminAccountsGetV1 has no `status` param —
+     * the old query was the reason Signups never loaded). GTS rows can be
+     * internal/instance accounts, so filter to real local, unapproved,
+     * unconfirmed signups.
      */
     suspend fun fetchPendingSignups(api: Api, base: String): List<AdminAccount> {
         val list = api.page(
             path = "/api/v1/admin/accounts",
             serializer = ListSerializer(AdminAccount.serializer()),
-            query = mapOf("status" to listOf("pending")),
+            query = mapOf("pending" to listOf("true")),
         )
         val host = runCatching { java.net.URI(base.trim()).host?.lowercase().orEmpty() }
             .getOrDefault("")

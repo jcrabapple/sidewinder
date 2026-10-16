@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -205,7 +206,7 @@ private fun SignupsTab(api: Api, base: String) {
                     api = api,
                     account = s.items[index],
                     onDone = { removed ->
-                        if (removed.approved) approvedAcct = removed.account.acct
+                        if (removed.approved) approvedAcct = removed.acct
                         remove(removed.id)
                     },
                 )
@@ -225,8 +226,8 @@ private fun SignupCard(
     var confirmDeny by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val name = account.account.display_name.ifBlank { account.account.username }
-    val acct = account.account.acct
+    val name = account.displayName
+    val acct = account.acct
     val reason = ModerationRepository.signupReason(account)
 
     fun decide(approve: Boolean) {
@@ -253,7 +254,7 @@ private fun SignupCard(
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
-                model = account.account.avatar_static ?: account.account.avatar,
+                model = account.avatarUrl,
                 contentDescription = null, // decorative; the row text carries the identity
                 modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small),
                 contentScale = ContentScale.Crop,
@@ -762,8 +763,8 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
     var confirmSuspend by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val name = account.account.display_name.ifBlank { account.account.username }
-    val acct = account.account.acct
+    val name = account.displayName
+    val acct = account.acct
     val isRemote = account.domain != null
 
     fun doSuspend() {
@@ -788,7 +789,7 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
     Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
-                model = account.account.avatar_static ?: account.account.avatar,
+                model = account.avatarUrl,
                 contentDescription = null,
                 modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small),
                 contentScale = ContentScale.Crop,
@@ -814,15 +815,22 @@ private fun AdminAccountCard(api: Api, account: AdminAccount) {
             supportingText = { Text("Recorded with the action") },
             singleLine = true,
         )
-        OutlinedButton(
+        // Full-width action row: the old trailing "Suspended"-labeled button
+        // overflowed narrow cards; the button names its action and spans.
+        Button(
             onClick = { confirmSuspend = true },
             enabled = !busy,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ),
             modifier = Modifier
+                .fillMaxWidth()
                 .padding(top = 12.dp)
                 .heightIn(min = 48.dp)
                 .semantics { contentDescription = "Suspend @$acct" },
         ) {
-            Text(if (busy) "Suspending" else "Suspend", color = MaterialTheme.colorScheme.error)
+            Text(if (busy) "Suspending\u2026" else "Suspend")
         }
         error?.let {
             Text(

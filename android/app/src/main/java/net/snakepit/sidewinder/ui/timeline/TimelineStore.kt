@@ -44,9 +44,16 @@ internal class TimelineHolder {
  */
 internal object TimelineStore {
     private const val MAX_HOLDERS = 12
+    private const val MAX_EXPANDED = 200
 
     // accessOrder = true: iteration order is least- to most-recently used.
     private val holders = LinkedHashMap<String, TimelineHolder>(16, 0.75f, true)
+
+    // Statuses the user expanded ("Show more") in a feed, so collapse state
+    // survives scrolling away and feed reloads. LRU-capped.
+    private val expandedStatuses = object : LinkedHashMap<String, Unit>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>): Boolean = size > MAX_EXPANDED
+    }
 
     private fun key(sessionId: String, source: TimelineSource): String = "$sessionId|$source"
 
@@ -65,6 +72,14 @@ internal object TimelineStore {
     /** Drop every timeline belonging to a session that no longer exists. */
     fun retainSessions(sessionIds: Set<String>) {
         holders.keys.removeAll { k -> k.substringBefore('|') !in sessionIds }
+    }
+
+    /** Whether [statusId] was expanded in a feed ("Show more"). */
+    fun isExpanded(statusId: String): Boolean = expandedStatuses.containsKey(statusId)
+
+    /** Records or clears the expanded state of a long post in feeds. */
+    fun setExpanded(statusId: String, expanded: Boolean) {
+        if (expanded) expandedStatuses[statusId] = Unit else expandedStatuses.remove(statusId)
     }
 
     /** Replace [updated] wherever it appears, directly or inside a boost. */
@@ -91,6 +106,21 @@ internal object TimelineStore {
         if (current.items.any { it.id == status.id }) return
         home.state = current.copy(items = listOf(status) + current.items)
         // Keep the reader's place: the new row shifts everything down one.
+        if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
+    }
+
+    /**
+     * Live home-timeline update from the streaming socket: prepend a new
+     * post from a followed account to this session's cached Home feed
+     * (replies included — the home stream mirrors the home timeline, which
+     * carries replies to people you follow). No-ops when the feed is not
+     * currently holding content; the next refresh picks those up.
+     */
+    fun applyStreamed(sessionId: String, status: Status) {
+        val home = holders[key(sessionId, TimelineSource.Home)] ?: return
+        val current = home.state as? TimelineState.Content ?: return
+        if (current.items.any { it.id == status.id }) return
+        home.state = current.copy(items = listOf(status) + current.items)
         if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
     }
 

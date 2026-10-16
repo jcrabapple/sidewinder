@@ -130,6 +130,18 @@ class Api(base: String, @Volatile var token: String? = null) {
         return json.decodeFromString(serializer, raw.text)
     }
 
+    /** Form-encoded PATCH (update_credentials; the endpoint is formData, not JSON). */
+    suspend fun <T> patchForm(
+        path: String,
+        form: Map<String, String>,
+        serializer: KSerializer<T>,
+    ): T {
+        val body = FormBody.Builder().apply { form.forEach { (k, v) -> add(k, v) } }.build()
+        val raw = send(path, "PATCH", body = null, query = emptyMap(), headers = emptyMap(), form = body)
+        if (raw.code !in 200..299) decodeError(raw)
+        return json.decodeFromString(serializer, raw.text)
+    }
+
     /**
      * Multipart file upload (media attachments). [fields] carries extra
      * form parts such as `description` (alt text) or `focus`.
@@ -142,6 +154,7 @@ class Api(base: String, @Volatile var token: String? = null) {
         mediaType: String,
         bytes: ByteArray,
         fields: Map<String, String> = emptyMap(),
+        method: String = "POST",
     ): T {
         val multipart = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -151,7 +164,7 @@ class Api(base: String, @Volatile var token: String? = null) {
                 bytes.toRequestBody(mediaType.toMediaType()),
             )
         fields.forEach { (k, v) -> multipart.addFormDataPart(k, v) }
-        val raw = send(path, "POST", body = null, query = emptyMap(), headers = emptyMap(), form = null, multipart = multipart.build())
+        val raw = send(path, method, body = null, query = emptyMap(), headers = emptyMap(), form = null, multipart = multipart.build())
         if (raw.code !in 200..299) decodeError(raw)
         return json.decodeFromString(serializer, raw.text)
     }

@@ -35,6 +35,10 @@ data class ComposeDraft(
     val pollOptions: List<String> = emptyList(),
     val pollMultiple: Boolean = false,
     val pollExpiry: Long = 86400L,
+    /** Schedule toggle for the draft post (new posts only). */
+    val scheduleOn: Boolean = false,
+    /** Epoch millis of the chosen publish time; 0 = not picked yet. */
+    val scheduledAtMs: Long = 0,
     val savedAt: Long = 0,
 )
 

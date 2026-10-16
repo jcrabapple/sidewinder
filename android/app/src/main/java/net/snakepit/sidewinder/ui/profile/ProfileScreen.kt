@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -25,6 +26,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,8 +56,12 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.mute.MuteRepository
 import net.snakepit.sidewinder.core.profile.ProfileRepository
 import net.snakepit.sidewinder.core.text.HtmlText
+import net.snakepit.sidewinder.ui.app.LocalAppActions
+import net.snakepit.sidewinder.ui.app.LocalAppSettings
+import net.snakepit.sidewinder.ui.mutes.MuteDialog
 import net.snakepit.sidewinder.ui.timeline.StatusCard
 
 /** Account-header fetch state; the header survives tab switches. */
@@ -109,6 +115,10 @@ fun ProfileScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
     val isSelf = accountId == session.account.id
+    val settings = LocalAppSettings.current
+    var confirmFollow by remember { mutableStateOf(false) }
+    var muteDialogOpen by remember { mutableStateOf(false) }
+    var noteDialogOpen by remember { mutableStateOf(false) }
 
     suspend fun loadAccount() {
         headerState = HeaderState.Loading
@@ -220,6 +230,31 @@ fun ProfileScreen(
         }
     }
 
+    /** Instant unmute; muting goes through [MuteDialog] to pick a duration. */
+    fun unmuteAccount() {
+        val rel = relationship ?: return
+        if (relBusy) return
+        val previous = rel
+        relationship = previous.copy(muting = false)
+        relBusy = true
+        scope.launch {
+            try {
+                MuteRepository.unmute(api, session.token, accountId)
+                relationship = ProfileRepository.relationship(api, accountId)
+            } catch (e: ApiError) {
+                relationship = previous
+                showNotice("Could not unmute: the server returned error ${e.status}. Your previous state was restored; try again.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                relationship = previous
+                showNotice("Could not unmute: ${e.message ?: "network error"}. Your previous state was restored; try again.")
+            } finally {
+                relBusy = false
+            }
+        }
+    }
+
     fun selectTab(tab: ProfileRepository.StatusesTab) {
         if (tab.name == selectedTabName) return
         // The seq bump below drops any request still in flight for the tab
@@ -310,7 +345,22 @@ fun ProfileScreen(
                             isSelf = isSelf,
                             relationship = relationship,
                             relBusy = relBusy,
-                            onToggleFollow = { toggleFollow() },
+                            onToggleFollow = {
+                                val rel = relationship
+                                if (settings.confirmBeforeFollow && rel != null && !rel.following && !rel.requested) {
+                                    confirmFollow = true
+                                } else {
+                                    toggleFollow()
+                                }
+                            },
+                            onMuteClick = if (isSelf) {
+                                null
+                            } else {
+                                {
+                                    if (relationship?.muting == true) unmuteAccount() else muteDialogOpen = true
+                                }
+                            },
+                            onNoteClick = if (isSelf) null else ({ noteDialogOpen = true }),
                             onOpenAccountList = onOpenAccountList,
                         )
                     }
@@ -390,6 +440,115 @@ fun ProfileScreen(
             }
         }
     }
+
+    val followTarget = (headerState as? HeaderState.Ready)?.account
+    if (confirmFollow && followTarget != null) {
+        AlertDialog(
+            onDismissRequest = { confirmFollow = false },
+            title = { Text("Follow @${followTarget.acct}?") },
+            text = { Text("Your follow request will be sent to this account.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmFollow = false
+                    toggleFollow()
+                }) { Text("Follow") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmFollow = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (muteDialogOpen) {
+        val account = (headerState as? HeaderState.Ready)?.account
+        if (account != null) {
+            MuteDialog(
+                account = account,
+                api = api,
+                token = session.token,
+                onDismiss = { notice ->
+                    muteDialogOpen = false
+                    if (notice != null) {
+                        showNotice(notice)
+                        scope.launch {
+                            runCatching { ProfileRepository.relationship(api, accountId) }
+                                .onSuccess { relationship = it }
+                        }
+                    }
+                },
+            )
+        } else {
+            muteDialogOpen = false
+        }
+    }
+
+    if (noteDialogOpen) {
+        var noteText by remember(relationship?.id) { mutableStateOf(relationship?.note.orEmpty()) }
+        var savingNote by remember { mutableStateOf(false) }
+        var noteError by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { if (!savingNote) noteDialogOpen = false },
+            title = { Text("Private note") },
+            text = {
+                Column {
+                    Text(
+                        "Only you can see this note. It is stored on your server.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        placeholder = { Text("Note about this account") },
+                        minLines = 3,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .semantics { contentDescription = "Private note text" },
+                    )
+                    noteError?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        savingNote = true
+                        noteError = null
+                        scope.launch {
+                            try {
+                                relationship = api.postForm(
+                                    path = "/api/v1/accounts/$accountId/note",
+                                    form = mapOf("comment" to noteText),
+                                    serializer = Relationship.serializer(),
+                                )
+                                noteDialogOpen = false
+                                showNotice("Note saved.")
+                            } catch (e: ApiError) {
+                                noteError = "Could not save the note: the server returned error ${e.status}. Try again."
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                noteError = "Could not save the note: ${e.message ?: "network error"}. Try again."
+                            }
+                            savingNote = false
+                        }
+                    },
+                    enabled = !savingNote,
+                    modifier = Modifier.semantics { contentDescription = "Save the private note" },
+                ) { Text(if (savingNote) "Saving\u2026" else "Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { noteDialogOpen = false }, enabled = !savingNote) { Text("Cancel") }
+            },
+        )
+    }
 }
 
 /** The three profile timeline tabs (web parity: posts / replies / media). */
@@ -425,8 +584,11 @@ private fun ProfileHeader(
     relationship: Relationship?,
     relBusy: Boolean,
     onToggleFollow: () -> Unit,
+    onMuteClick: (() -> Unit)? = null,
+    onNoteClick: (() -> Unit)? = null,
     onOpenAccountList: ((String) -> Unit)? = null,
 ) {
+    val actions = LocalAppActions.current
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
@@ -448,12 +610,46 @@ private fun ProfileHeader(
             }
         }
 
-        if (!isSelf && relationship != null) {
+        if (isSelf) {
+            TextButton(
+                onClick = { actions?.openEditProfile() },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Edit your profile" },
+            ) {
+                Text("Edit profile")
+            }
+        } else if (relationship != null) {
             RelationshipButton(
                 relationship = relationship,
                 busy = relBusy,
                 onToggleFollow = onToggleFollow,
             )
+            if (onMuteClick != null) {
+                TextButton(
+                    onClick = onMuteClick,
+                    enabled = !relBusy,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription =
+                                if (relationship.muting) "Unmute this account" else "Mute this account"
+                        },
+                ) {
+                    Text(if (relationship.muting) "Unmute" else "Mute")
+                }
+                if (onNoteClick != null) {
+                    TextButton(
+                        onClick = onNoteClick,
+                        enabled = !relBusy,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = "Edit your private note about this account" },
+                    ) {
+                        Text(if (relationship.note.isBlank()) "Add note" else "Edit note")
+                    }
+                }
+            }
         }
 
         if (account.note.isNotBlank()) {

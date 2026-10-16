@@ -6,6 +6,8 @@ import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,8 +37,10 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -47,7 +51,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +87,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
+import net.snakepit.sidewinder.core.filters.FilterCache
+import net.snakepit.sidewinder.core.filters.FilterEngine
+import net.snakepit.sidewinder.core.filters.FilterHit
+import net.snakepit.sidewinder.core.filters.FilterableText
 import net.snakepit.sidewinder.core.model.MediaAttachment
 import net.snakepit.sidewinder.core.model.Poll
 import net.snakepit.sidewinder.core.model.PreviewCard
@@ -93,7 +103,15 @@ import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
 import net.snakepit.sidewinder.ui.app.shareText
 import net.snakepit.sidewinder.ui.media.MediaViewer
+import net.snakepit.sidewinder.ui.text.EmojiText
 import net.snakepit.sidewinder.ui.theme.LocalActionColors
+import org.jsoup.Jsoup
+
+/** Posts whose plain text exceeds this many characters collapse in feeds. */
+private const val COLLAPSE_THRESHOLD = 480
+
+/** Lines of a collapsed long post shown before the "Show more" button. */
+private const val COLLAPSED_LINES = 10
 
 /**
  * The atom of the timeline. Port of web `src/components/StatusCard.tsx`
@@ -120,12 +138,40 @@ fun StatusCard(
     onOpenThread: (String) -> Unit,
     onCompose: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Filter context ("home"/"notifications"/"public"/"thread"); null skips filtering. */
+    filterContext: String? = null,
+    /** True when the card is a timeline row (wellbeing media-hiding applies). */
+    inTimeline: Boolean = false,
 ) {
     // Boost wrapper: render the booster's name in a header line and the
     // inner status as the payload (the only sanctioned non-null use).
     val boosted = status.reblog != null
     val inner = status.reblog ?: status
     val actions = LocalAppActions.current
+    val settings = LocalAppSettings.current
+
+    // Filter verdict: server-provided `filtered` first, client-side match
+    // over the cached v2 filters as fallback. "Show anyway" overrides it
+    // for the rest of this card's composition.
+    var filterHit by remember(inner.id, filterContext) { mutableStateOf<FilterHit?>(null) }
+    var filterRevealed by remember(inner.id) { mutableStateOf(false) }
+    LaunchedEffect(inner.id, filterContext) {
+        val context = filterContext ?: return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        FilterEngine.verdict(inner.filtered, context, now)?.let {
+            filterHit = it
+            return@LaunchedEffect
+        }
+        val filters = runCatching { FilterCache.current(api, api.token ?: "") }.getOrDefault(emptyList())
+        val filterable = FilterableText(
+            text = Jsoup.parse(inner.content).text(),
+            spoiler = inner.spoiler_text,
+            pollOptions = inner.poll?.options?.map { it.title }.orEmpty(),
+            mediaDescriptions = inner.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+        )
+        filterHit = FilterEngine.match(filters, filterable, context, now)
+    }
+    val activeFilter = filterHit?.takeIf { !filterRevealed }
 
     Column(
         modifier = modifier
@@ -136,6 +182,10 @@ fun StatusCard(
             }
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+        if (activeFilter?.action == "hide") {
+            FilteredRow(hit = activeFilter, onShow = { filterRevealed = true })
+            return@Column
+        }
         if (boosted) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -173,10 +223,41 @@ fun StatusCard(
             onStatusUpdated(mergeUpdated(status, inner.copy(poll = updated)))
         }
 
-        if (inner.spoiler_text.isNotEmpty()) {
-            SpoilerSection(status = inner, baseUrl = baseUrl, api = api, onPollUpdated = onPollUpdated, onNotice = onNotice)
-        } else {
-            StatusContent(status = inner, baseUrl = baseUrl, api = api, onPollUpdated = onPollUpdated, onNotice = onNotice)
+        // Media previews hide in timelines when wellbeing asks; thread and
+        // profile views keep them. Long posts collapse in feeds only.
+        val showMediaPreviews = !inTimeline || !settings.hideMediaPreviews
+        val collapsible = inTimeline && settings.collapseLongPosts
+        val content: @Composable () -> Unit = {
+            if (inner.spoiler_text.isNotEmpty()) {
+                SpoilerSection(
+                    status = inner,
+                    baseUrl = baseUrl,
+                    api = api,
+                    onPollUpdated = onPollUpdated,
+                    onNotice = onNotice,
+                    showMediaPreviews = showMediaPreviews,
+                    collapsible = collapsible,
+                )
+            } else {
+                StatusContent(
+                    status = inner,
+                    baseUrl = baseUrl,
+                    api = api,
+                    onPollUpdated = onPollUpdated,
+                    onNotice = onNotice,
+                    showMediaPreviews = showMediaPreviews,
+                    collapsible = collapsible,
+                )
+            }
+        }
+
+        when (activeFilter?.action) {
+            "blur" -> FilterBlurredBlock(hit = activeFilter, onShow = { filterRevealed = true }, content = content)
+            "warn" -> {
+                FilterBanner(hit = activeFilter, onShow = { filterRevealed = true })
+                content()
+            }
+            else -> content()
         }
 
         CountsRow(
@@ -187,6 +268,8 @@ fun StatusCard(
             onStatusUpdated = onStatusUpdated,
             onNotice = onNotice,
             onReply = onCompose,
+            hideCounts = settings.hideEngagementCounts,
+            confirmBoostSetting = settings.confirmBeforeBoost,
         )
     }
 }
@@ -227,8 +310,9 @@ private fun HeaderRow(status: Status, onOpenProfile: ((String) -> Unit)?) {
             )
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(
+                EmojiText(
                     text = authorName,
+                    emojis = status.account.emojis,
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -258,10 +342,16 @@ private fun SpoilerSection(
     api: Api,
     onPollUpdated: (Poll) -> Unit,
     onNotice: (String) -> Unit,
+    showMediaPreviews: Boolean = true,
+    collapsible: Boolean = false,
 ) {
     var revealed by remember(status.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Text(text = status.spoiler_text, style = MaterialTheme.typography.bodyMedium)
+        EmojiText(
+            text = status.spoiler_text,
+            emojis = status.emojis,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         FilledTonalButton(
             onClick = { revealed = !revealed },
             modifier = Modifier
@@ -272,7 +362,7 @@ private fun SpoilerSection(
             Text(if (revealed) "Show less" else "Show more")
         }
         if (revealed) {
-            StatusContent(status = status, baseUrl = baseUrl, api = api, onPollUpdated = onPollUpdated, onNotice = onNotice)
+            StatusContent(status = status, baseUrl = baseUrl, api = api, onPollUpdated = onPollUpdated, onNotice = onNotice, showMediaPreviews = showMediaPreviews, collapsible = collapsible)
         }
     }
 }
@@ -284,8 +374,15 @@ private fun StatusContent(
     api: Api,
     onPollUpdated: (Poll) -> Unit,
     onNotice: (String) -> Unit,
+    showMediaPreviews: Boolean = true,
+    collapsible: Boolean = false,
 ) {
     val hasBody = status.content.isNotBlank() && !htmlIsEmpty(status.content)
+    // Long-post collapse (feeds only): plain-text length decides, expand
+    // state persists in TimelineStore across scrolling and reloads.
+    val isLong = collapsible && hasBody &&
+        remember(status.content) { Jsoup.parse(status.content).text().length > COLLAPSE_THRESHOLD }
+    var expanded by remember(status.id) { mutableStateOf(!isLong || TimelineStore.isExpanded(status.id)) }
     if (hasBody) {
         HtmlText(
             html = status.content,
@@ -293,22 +390,40 @@ private fun StatusContent(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             tags = status.tags,
             mentions = status.mentions,
+            maxLines = if (isLong && !expanded) COLLAPSED_LINES else Int.MAX_VALUE,
+            overflow = if (isLong && !expanded) TextOverflow.Ellipsis else TextOverflow.Clip,
         )
+        if (isLong) {
+            TextButton(
+                onClick = {
+                    expanded = !expanded
+                    TimelineStore.setExpanded(status.id, expanded)
+                },
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .heightIn(min = 48.dp)
+                    .semantics {
+                        contentDescription = if (expanded) "Show less of this post" else "Show more of this post"
+                    },
+            ) { Text(if (expanded) "Show less" else "Show more") }
+        }
     }
     val media = status.media_attachments
     if (media.isNotEmpty()) {
-        Spacer(Modifier.height(8.dp))
-        // Sensitive media starts hidden behind a reveal overlay (web parity).
-        var mediaRevealed by remember(status.id) { mutableStateOf(!status.sensitive) }
-        var viewerIndex by remember(status.id) { mutableStateOf<Int?>(null) }
-        MediaGrid(
-            media = media,
-            blurred = !mediaRevealed,
-            onReveal = { mediaRevealed = true },
-            onOpen = { index -> viewerIndex = index },
-        )
-        viewerIndex?.let { index ->
-            MediaViewer(media = media, startIndex = index, onDismiss = { viewerIndex = null })
+        if (showMediaPreviews) {
+            Spacer(Modifier.height(8.dp))
+            // Sensitive media starts hidden behind a reveal overlay (web parity).
+            var mediaRevealed by remember(status.id) { mutableStateOf(!status.sensitive) }
+            var viewerIndex by remember(status.id) { mutableStateOf<Int?>(null) }
+            MediaGrid(
+                media = media,
+                blurred = !mediaRevealed,
+                onReveal = { mediaRevealed = true },
+                onOpen = { index -> viewerIndex = index },
+            )
+            viewerIndex?.let { index ->
+                MediaViewer(media = media, startIndex = index, onDismiss = { viewerIndex = null })
+            }
         }
     } else {
         // Servers attach a preview card to link posts; media wins when both exist.
@@ -571,11 +686,16 @@ private fun PollRows(
                 val votes = option.votes_count ?: 0
                 val percent = if (total > 0) ((votes * 100.0) / total).roundToInt() else 0
                 val own = index in poll.own_votes
-                Text(
-                    text = (if (own) "\u2713 " else "") + "${option.title} \u2014 $percent% ($votes votes)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (own) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                )
+                val optionColor = if (own) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = if (own) "\u2713 " else "", style = MaterialTheme.typography.bodyMedium, color = optionColor)
+                    EmojiText(text = option.title, emojis = poll.emojis, style = MaterialTheme.typography.bodyMedium, color = optionColor)
+                    Text(
+                        text = " \u2014 $percent% ($votes votes)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = optionColor,
+                    )
+                }
             }
         } else {
             poll.options.forEachIndexed { index, option ->
@@ -615,7 +735,7 @@ private fun PollRows(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    Text(option.title, style = MaterialTheme.typography.bodyMedium)
+                    EmojiText(text = option.title, emojis = poll.emojis, style = MaterialTheme.typography.bodyMedium)
                 }
             }
             Button(
@@ -680,11 +800,15 @@ private fun CountsRow(
     onStatusUpdated: (Status) -> Unit,
     onNotice: (String) -> Unit,
     onReply: (String) -> Unit,
+    hideCounts: Boolean = false,
+    confirmBoostSetting: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     // Action currently in flight, so rapid taps cannot double-fire and a
     // second toggle cannot start before the first one settles.
     var pending by remember { mutableStateOf<String?>(null) }
+    var confirmBoost by remember { mutableStateOf(false) }
+    var boostContext by remember { mutableStateOf(false) }
 
     fun toggle(action: String, label: String, active: Boolean) {
         if (pending != null) return
@@ -735,12 +859,17 @@ private fun CountsRow(
             IconButton(
                 onClick = { onReply(status.id) },
                 modifier = Modifier.semantics {
-                    contentDescription = "Reply, ${formatCount(status.replies_count)} replies"
+                    contentDescription =
+                        if (hideCounts) "Reply" else "Reply, ${formatCount(status.replies_count)} replies"
                 },
             ) {
-                Icon(Icons.Outlined.ChatBubbleOutline, contentDescription = null)
+                Icon(
+                    Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = null,
+                    modifier = Modifier.bouncing(),
+                )
             }
-            if (status.replies_count > 0) {
+            if (!hideCounts && status.replies_count > 0) {
                 Text(
                     text = formatCount(status.replies_count),
                     style = MaterialTheme.typography.labelMedium,
@@ -748,42 +877,73 @@ private fun CountsRow(
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = formatCount(status.reblogs_count),
-                style = MaterialTheme.typography.labelMedium,
-            )
-            IconButton(
-                onClick = { toggle("reblog", "boost", status.reblogged) },
-                enabled = canBoost && pending == null,
-                modifier = Modifier.semantics {
-                    contentDescription =
-                        if (status.reblogged) "Undo boost, ${formatCount(status.reblogs_count)} boosts" else "Boost, ${formatCount(status.reblogs_count)} boosts"
-                },
+            if (!hideCounts) {
+                Text(
+                    text = formatCount(status.reblogs_count),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            // One target for tap + long-press (IconButton has no
+            // onLongClick): Box carries both, 48dp preserved.
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = androidx.compose.material3.ripple(bounded = false),
+                        enabled = canBoost && pending == null,
+                        role = Role.Button,
+                        onClick = {
+                            if (confirmBoostSetting && !status.reblogged) confirmBoost = true else toggle("reblog", "boost", status.reblogged)
+                        },
+                        onLongClick = if (!status.reblogged && canBoost) {
+                            { boostContext = true }
+                        } else {
+                            null
+                        },
+                    )
+                    .semantics {
+                        contentDescription =
+                            if (hideCounts) {
+                                if (status.reblogged) "Undo boost" else "Boost"
+                            } else {
+                                if (status.reblogged) "Undo boost, ${formatCount(status.reblogs_count)} boosts" else "Boost, ${formatCount(status.reblogs_count)} boosts"
+                            }
+                    },
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     Icons.Outlined.Repeat,
                     contentDescription = null,
                     tint = if (status.reblogged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.bouncing().pulseOn(status.reblogged),
                 )
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = formatCount(status.favourites_count),
-                style = MaterialTheme.typography.labelMedium,
-            )
+            if (!hideCounts) {
+                Text(
+                    text = formatCount(status.favourites_count),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
             IconButton(
                 onClick = { toggle("favourite", "favourite", status.favourited) },
                 enabled = pending == null,
                 modifier = Modifier.semantics {
                     contentDescription =
-                        if (status.favourited) "Remove favourite, ${formatCount(status.favourites_count)} favourites" else "Favourite, ${formatCount(status.favourites_count)} favourites"
+                        if (hideCounts) {
+                            if (status.favourited) "Remove favourite" else "Favourite"
+                        } else {
+                            if (status.favourited) "Remove favourite, ${formatCount(status.favourites_count)} favourites" else "Favourite, ${formatCount(status.favourites_count)} favourites"
+                        }
                 },
             ) {
                 Icon(
                     if (status.favourited) Icons.Filled.Star else Icons.Outlined.StarBorder,
                     contentDescription = null,
                     tint = if (status.favourited) LocalActionColors.current.favourite else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.bouncing().pulseOn(status.favourited),
                 )
             }
         }
@@ -798,10 +958,75 @@ private fun CountsRow(
                 if (status.bookmarked) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
                 contentDescription = null,
                 tint = if (status.bookmarked) LocalActionColors.current.bookmark else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.bouncing().pulseOn(status.bookmarked),
             )
         }
         StatusMenu(status = status, onNotice = onNotice)
     }
+
+    if (confirmBoost) {
+        AlertDialog(
+            onDismissRequest = { confirmBoost = false },
+            title = { Text("Boost this post?") },
+            text = { Text("It will be shared with your followers.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBoost = false
+                    toggle("reblog", "boost", status.reblogged)
+                }) { Text("Boost") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBoost = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (boostContext) {
+        AlertDialog(
+            onDismissRequest = { boostContext = false },
+            title = { Text("Boost this post?") },
+            text = {
+                Column {
+                    Text(
+                        "By ${status.account.display_name?.takeIf { it.isNotBlank() } ?: "@" + status.account.acct}",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (status.spoiler_text.isNotBlank()) {
+                        Text(
+                            "CW: ${status.spoiler_text}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    Text(
+                        text = audienceLine(status.visibility),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    boostContext = false
+                    toggle("reblog", "boost", status.reblogged)
+                }) { Text("Boost") }
+            },
+            dismissButton = {
+                TextButton(onClick = { boostContext = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** Plain-language audience line for a post visibility value. */
+private fun audienceLine(visibility: String): String = when (visibility) {
+    "public" -> "Originally posted publicly."
+    "unlisted" -> "Originally posted unlisted: not on public timelines."
+    "private" -> "Originally posted to followers only."
+    "local" -> "Originally posted to this server only."
+    "direct" -> "Originally a direct post."
+    else -> "Originally posted: $visibility."
 }
 
 /**
@@ -919,4 +1144,81 @@ internal fun absoluteTimestamp(isoTimestamp: String): String {
         ?: return isoTimestamp
     return parsed.atZone(ZoneId.systemDefault())
         .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT))
+}
+
+/** Minimal row shown in place of a fully hidden (filter_action "hide") post. */
+@Composable
+private fun FilteredRow(hit: FilterHit, onShow: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.FilterAlt,
+            contentDescription = null, // the text beside it carries the meaning
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Filtered: ${hit.title}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f).semantics {
+                contentDescription = "Post hidden by filter ${hit.title}"
+            },
+        )
+        TextButton(onClick = onShow, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Show anyway")
+        }
+    }
+}
+
+/** Banner above a warn-filtered post's content; content stays hidden until shown. */
+@Composable
+private fun FilterBanner(hit: FilterHit, onShow: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 12.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text = "Filtered: ${hit.title}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f).semantics {
+                contentDescription = "Post filtered by ${hit.title}"
+            },
+        )
+        TextButton(onClick = onShow, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("Show anyway")
+        }
+    }
+}
+
+/** Blur-scrim wrapper for blur-filtered posts; first tap reveals. */
+@Composable
+private fun FilterBlurredBlock(hit: FilterHit, onShow: () -> Unit, content: @Composable () -> Unit) {
+    Box {
+        Column(Modifier.blur(14.dp)) { content() }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                .clickable(onClick = onShow)
+                .semantics { contentDescription = "Post filtered by ${hit.title}. Show it." },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Filtered: ${hit.title} \u2014 tap to show",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
 }

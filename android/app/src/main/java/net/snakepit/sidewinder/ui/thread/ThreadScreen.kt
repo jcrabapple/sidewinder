@@ -40,6 +40,7 @@ import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.thread.ThreadRepository
+import net.snakepit.sidewinder.core.mute.MuteRepository
 import net.snakepit.sidewinder.ui.timeline.StatusCard
 import net.snakepit.sidewinder.ui.timeline.TimelineStore
 
@@ -82,6 +83,8 @@ fun ThreadScreen(
 ) {
     var state by remember(statusId) { mutableStateOf<ThreadState>(ThreadState.Loading) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var historyOpen by remember { mutableStateOf(false) }
+    var unrollOpen by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -142,6 +145,23 @@ fun ThreadScreen(
         }
     }
 
+    /** Mute or unmute notifications for this conversation. */
+    fun toggleThreadMute(focus: Status) {
+        scope.launch {
+            try {
+                MuteRepository.setThreadMuted(api, session.token, focus.id, !focus.muted)
+                updateStatus(focus.copy(muted = !focus.muted))
+                showNotice(if (focus.muted) "Conversation unmuted." else "Conversation muted. You will not get notifications about it.")
+            } catch (e: ApiError) {
+                showNotice("Could not change the conversation mute: the server returned error ${e.status}. Try again.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("Could not change the conversation mute: ${e.message ?: "network error"}. Check your connection and try again.")
+            }
+        }
+    }
+
     LaunchedEffect(api, session.id, statusId) { load() }
 
     if (showDeleteDialog) {
@@ -168,6 +188,20 @@ fun ThreadScreen(
                     Text("Cancel")
                 }
             },
+        )
+    }
+
+    if (historyOpen) {
+        HistoryDialog(statusId = statusId, api = api, baseUrl = session.base, onDismiss = { historyOpen = false })
+    }
+    val threadContent = state as? ThreadState.Content
+    if (unrollOpen && threadContent != null) {
+        UnrollDialog(
+            ancestors = threadContent.ancestors,
+            focus = threadContent.focus,
+            descendants = threadContent.descendants,
+            baseUrl = session.base,
+            onDismiss = { unrollOpen = false },
         )
     }
 
@@ -216,6 +250,7 @@ fun ThreadScreen(
                             onNotice = { showNotice(it) },
                             onOpenThread = onOpenThread,
                             onCompose = onCompose,
+                            filterContext = "thread",
                         )
                         HorizontalDivider()
                     }
@@ -236,21 +271,22 @@ fun ThreadScreen(
                             // The focused status is already this thread; do not re-navigate.
                             onOpenThread = {},
                             onCompose = onCompose,
+                            filterContext = "thread",
                         )
-                        if (s.focus.account.id == session.account.id) {
-                            Row(Modifier.padding(start = 8.dp, end = 16.dp, bottom = 8.dp)) {
-                                // Poll posts are not editable (see StatusCard's menu).
-                                if (onEdit != null && s.focus.poll == null) {
-                                    TextButton(
-                                        onClick = { onEdit(s.focus.id) },
-                                        enabled = !s.deleting,
-                                        modifier = Modifier
-                                            .heightIn(min = 48.dp)
-                                            .semantics { contentDescription = "Edit this post" },
-                                    ) {
-                                        Text("Edit post")
-                                    }
+                        Row(Modifier.padding(start = 8.dp, end = 16.dp, bottom = 8.dp)) {
+                            // Poll posts are not editable (see StatusCard's menu).
+                            if (s.focus.account.id == session.account.id && onEdit != null && s.focus.poll == null) {
+                                TextButton(
+                                    onClick = { onEdit(s.focus.id) },
+                                    enabled = !s.deleting,
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .semantics { contentDescription = "Edit this post" },
+                                ) {
+                                    Text("Edit post")
                                 }
+                            }
+                            if (s.focus.account.id == session.account.id) {
                                 TextButton(
                                     onClick = { showDeleteDialog = true },
                                     enabled = !s.deleting,
@@ -263,6 +299,35 @@ fun ThreadScreen(
                                         color = MaterialTheme.colorScheme.error,
                                     )
                                 }
+                            }
+                            TextButton(
+                                onClick = { toggleThreadMute(s.focus) },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .semantics {
+                                        contentDescription =
+                                            if (s.focus.muted) "Unmute this conversation" else "Mute this conversation"
+                                    },
+                            ) {
+                                Text(if (s.focus.muted) "Unmute conversation" else "Mute conversation")
+                            }
+                            if (s.focus.edited_at != null) {
+                                TextButton(
+                                    onClick = { historyOpen = true },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .semantics { contentDescription = "Show the edit history of this post" },
+                                ) {
+                                    Text("History")
+                                }
+                            }
+                            TextButton(
+                                onClick = { unrollOpen = true },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .semantics { contentDescription = "Unroll this thread as an article" },
+                            ) {
+                                Text("Unroll")
                             }
                         }
                     }
@@ -281,6 +346,7 @@ fun ThreadScreen(
                             onNotice = { showNotice(it) },
                             onOpenThread = onOpenThread,
                             onCompose = onCompose,
+                            filterContext = "thread",
                             modifier = Modifier.padding(start = 16.dp),
                         )
                         HorizontalDivider()

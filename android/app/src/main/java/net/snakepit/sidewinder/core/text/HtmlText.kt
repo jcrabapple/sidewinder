@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import java.net.URI
 import net.snakepit.sidewinder.core.model.Mention
@@ -210,6 +211,8 @@ fun HtmlText(
     modifier: Modifier = Modifier,
     tags: List<Tag> = emptyList(),
     mentions: List<Mention> = emptyList(),
+    maxLines: Int = Int.MAX_VALUE,
+    overflow: TextOverflow = TextOverflow.Clip,
 ) {
     val linkStyle = SpanStyle(
         color = MaterialTheme.colorScheme.primary,
@@ -232,5 +235,5 @@ fun HtmlText(
         }
         sanitizeHtmlToAnnotatedString(html, baseUrl, linkStyle, onLink)
     }
-    Text(text = text, modifier = modifier)
+    Text(text = text, modifier = modifier, maxLines = maxLines, overflow = overflow)
 }

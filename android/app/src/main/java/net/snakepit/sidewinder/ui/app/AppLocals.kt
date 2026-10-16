@@ -32,6 +32,8 @@ class AppActions(
     val selfAccountId: String = "",
     /** Open the composer in edit mode for an own status. */
     val openEdit: (statusId: String) -> Unit = {},
+    /** Open the profile editor for the signed-in account. */
+    val openEditProfile: () -> Unit = {},
 )
 
 val LocalAppActions = staticCompositionLocalOf<AppActions?> { null }

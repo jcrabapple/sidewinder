@@ -3,6 +3,8 @@
 package net.snakepit.sidewinder.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,6 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -42,7 +45,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.defaultMinSize
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import net.snakepit.sidewinder.core.datastore.SessionStore
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.settings.AppSettings
@@ -53,6 +60,7 @@ private val themeLabels = mapOf(
     ThemePref.SYSTEM to "System",
     ThemePref.DARK to "Dark",
     ThemePref.LIGHT to "Light",
+    ThemePref.AMOLED to "AMOLED black",
 )
 
 private val visibilityLabels = mapOf(
@@ -61,6 +69,76 @@ private val visibilityLabels = mapOf(
     "private" to "Private",
     "direct" to "Direct",
 )
+
+/** Interface text-scale choices; 100% follows the system font size. */
+private val textScaleOptions = listOf(
+    0.8f to "80%",
+    0.9f to "90%",
+    1.0f to "100%",
+    1.1f to "110%",
+    1.2f to "120%",
+    1.3f to "130%",
+)
+
+private fun textScaleLabel(value: Float): String =
+    textScaleOptions.firstOrNull { it.first == value }?.second ?: "100%"
+
+/** Portable copy of the app settings for export/import (SAF JSON files). */
+@Serializable
+private data class SettingsBackup(
+    val theme: String,
+    val relativeTimes: Boolean,
+    val defaultVisibility: String,
+    val requireAltText: Boolean,
+    val backgroundNotifications: Boolean,
+    val hideEngagementCounts: Boolean,
+    val confirmBeforeBoost: Boolean,
+    val confirmBeforeFollow: Boolean,
+    val hideMediaPreviews: Boolean,
+    val hideNoAltPosts: Boolean,
+    val collapseLongPosts: Boolean,
+    val dynamicColor: Boolean,
+    val textScale: Float,
+    val reduceMotion: Boolean,
+) {
+    fun toSettings(): AppSettings = AppSettings(
+        theme = runCatching { ThemePref.valueOf(theme) }.getOrDefault(ThemePref.SYSTEM),
+        relativeTimes = relativeTimes,
+        defaultVisibility = defaultVisibility,
+        requireAltText = requireAltText,
+        backgroundNotifications = backgroundNotifications,
+        hideEngagementCounts = hideEngagementCounts,
+        confirmBeforeBoost = confirmBeforeBoost,
+        confirmBeforeFollow = confirmBeforeFollow,
+        hideMediaPreviews = hideMediaPreviews,
+        hideNoAltPosts = hideNoAltPosts,
+        collapseLongPosts = collapseLongPosts,
+        dynamicColor = dynamicColor,
+        textScale = textScale.coerceIn(0.8f, 1.3f),
+        reduceMotion = reduceMotion,
+    )
+
+    companion object {
+        fun from(s: AppSettings) = SettingsBackup(
+            theme = s.theme.name,
+            relativeTimes = s.relativeTimes,
+            defaultVisibility = s.defaultVisibility,
+            requireAltText = s.requireAltText,
+            backgroundNotifications = s.backgroundNotifications,
+            hideEngagementCounts = s.hideEngagementCounts,
+            confirmBeforeBoost = s.confirmBeforeBoost,
+            confirmBeforeFollow = s.confirmBeforeFollow,
+            hideMediaPreviews = s.hideMediaPreviews,
+            hideNoAltPosts = s.hideNoAltPosts,
+            collapseLongPosts = s.collapseLongPosts,
+            dynamicColor = s.dynamicColor,
+            textScale = s.textScale,
+            reduceMotion = s.reduceMotion,
+        )
+    }
+}
+
+private val settingsJson = Json { ignoreUnknownKeys = true }
 
 /**
  * App settings. Port of web `src/views/Settings.tsx`: local JSON-backed
@@ -77,6 +155,10 @@ fun SettingsScreen(
     onSettingsChanged: suspend () -> Unit = {},
     onOpenModeration: () -> Unit = {},
     onOpenLists: () -> Unit = {},
+    onOpenFilters: () -> Unit = {},
+    onOpenMutes: () -> Unit = {},
+    onOpenScheduled: () -> Unit = {},
+    onOpenDms: () -> Unit = {},
 ) {
     var settings by remember { mutableStateOf<AppSettings?>(null) }
     var confirmSignOut by remember { mutableStateOf(false) }
@@ -103,6 +185,50 @@ fun SettingsScreen(
                 previous
             }
             onSettingsChanged()
+        }
+    }
+
+    // ---- Export / import via SAF --------------------------------------
+    val context = LocalContext.current
+    var transferMessage by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val current = settings
+        if (uri == null || current == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(settingsJson.encodeToString(SettingsBackup.serializer(), SettingsBackup.from(current)).toByteArray())
+                    } ?: throw IllegalStateException("storage unavailable")
+                }
+                transferMessage = "Settings exported."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                transferMessage = "Could not export settings: ${e.message ?: "storage error"}."
+            }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                val text = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                }
+                val restored = text?.let { settingsJson.decodeFromString(SettingsBackup.serializer(), it) }?.toSettings()
+                if (restored == null) throw IllegalStateException("empty file")
+                apply { restored }
+                transferMessage = "Settings imported."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                transferMessage = "Could not import settings: not a Sidewinder settings file."
+            }
         }
     }
 
@@ -168,6 +294,136 @@ fun SettingsScreen(
             onCheckedChange = { value -> apply { it.copy(backgroundNotifications = value) } },
         )
 
+        ToggleRow(
+            title = "Hide engagement counts",
+            subtitle = "Don't show reply, boost and favourite counts on posts.",
+            checked = loaded.hideEngagementCounts,
+            label = "Hide engagement counts toggle",
+            onCheckedChange = { value -> apply { it.copy(hideEngagementCounts = value) } },
+        )
+
+        ToggleRow(
+            title = "Confirm before boosting",
+            subtitle = "Ask before sharing a post with your followers.",
+            checked = loaded.confirmBeforeBoost,
+            label = "Confirm before boosting toggle",
+            onCheckedChange = { value -> apply { it.copy(confirmBeforeBoost = value) } },
+        )
+
+        ToggleRow(
+            title = "Confirm before following",
+            subtitle = "Ask before sending a follow request.",
+            checked = loaded.confirmBeforeFollow,
+            label = "Confirm before following toggle",
+            onCheckedChange = { value -> apply { it.copy(confirmBeforeFollow = value) } },
+        )
+
+        ToggleRow(
+            title = "Hide media previews",
+            subtitle = "Don't show images and videos in timelines. Media stays visible in threads.",
+            checked = loaded.hideMediaPreviews,
+            label = "Hide media previews toggle",
+            onCheckedChange = { value -> apply { it.copy(hideMediaPreviews = value) } },
+        )
+
+        ToggleRow(
+            title = "Hide posts without alt text",
+            subtitle = "Only show timeline posts whose media have descriptions.",
+            checked = loaded.hideNoAltPosts,
+            label = "Hide posts without alt text toggle",
+            onCheckedChange = { value -> apply { it.copy(hideNoAltPosts = value) } },
+        )
+
+        ToggleRow(
+            title = "Dynamic colors",
+            subtitle = "Use your wallpaper colors on Android 12 and up. Off keeps the Sidewinder palette.",
+            checked = loaded.dynamicColor,
+            label = "Dynamic colors toggle",
+            onCheckedChange = { value -> apply { it.copy(dynamicColor = value) } },
+        )
+
+        DropdownSettingRow(
+            title = "Text size",
+            currentLabel = textScaleLabel(loaded.textScale),
+            contentDescription = "Choose the interface text size",
+            options = textScaleOptions,
+            onSelect = { value -> apply { it.copy(textScale = value) } },
+        )
+
+        ToggleRow(
+            title = "Reduce motion",
+            subtitle = "Tone down animations like the back-to-top pill.",
+            checked = loaded.reduceMotion,
+            label = "Reduce motion toggle",
+            onCheckedChange = { value -> apply { it.copy(reduceMotion = value) } },
+        )
+
+        ToggleRow(
+            title = "Live streaming",
+            subtitle = "New posts and notifications arrive in real time while the app is open. " +
+                "Turn off to load only when you refresh.",
+            checked = loaded.liveStreaming,
+            label = "Live streaming toggle",
+            onCheckedChange = { value -> apply { it.copy(liveStreaming = value) } },
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(onClick = onOpenFilters)
+                .semantics { contentDescription = "Manage your filters" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Filters", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Hide or blur posts matching keywords you choose.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(onClick = onOpenMutes)
+                .semantics { contentDescription = "Manage your muted accounts" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Muted accounts", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Accounts you have muted, with unmute shortcuts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(onClick = onOpenScheduled)
+                .semantics { contentDescription = "Open your scheduled posts" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Scheduled posts", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Posts waiting to publish at their scheduled time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -206,6 +462,79 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable(onClick = onOpenDms)
+                .semantics { contentDescription = "Open your direct messages" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Direct messages", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Conversations from direct and mentioned posts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable {
+                    transferMessage = null
+                    exportLauncher.launch("sidewinder-settings.json")
+                }
+                .semantics { contentDescription = "Export settings to a file" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Export settings", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Save your preferences to a file.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .clickable {
+                    transferMessage = null
+                    importLauncher.launch(arrayOf("application/json"))
+                }
+                .semantics { contentDescription = "Import settings from a file" }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(text = "Import settings", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = "Restore preferences from an exported file.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        transferMessage?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

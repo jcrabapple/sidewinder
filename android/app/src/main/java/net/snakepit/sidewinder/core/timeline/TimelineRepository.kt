@@ -3,6 +3,7 @@ package net.snakepit.sidewinder.core.timeline
 import android.net.Uri
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonElement
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.Page
@@ -71,7 +72,39 @@ object TimelineRepository {
             form = emptyMap(),
             serializer = TagInfo.serializer(),
         )
+
+    /**
+     * Saves the home read position server-side, so returning on another
+     * device (or after cache loss) can jump past what was already read.
+     * GTS supports markers for home and notifications only.
+     */
+    suspend fun saveMarker(api: Api, lastReadId: String) {
+        api.postForm(
+            path = "/api/v1/markers",
+            form = mapOf("home[last_read_id]" to lastReadId),
+            serializer = JsonElement.serializer(),
+        )
+    }
+
+    /** Last saved home read position, or null when none exists. */
+    suspend fun readMarker(api: Api): String? =
+        api.request(
+            path = "/api/v1/markers",
+            serializer = MarkerResponse.serializer(),
+            query = mapOf("timeline[]" to listOf("home")),
+        ).home?.last_read_id?.takeIf { it.isNotBlank() }
 }
+
+/** `/api/v1/markers` payload subset (home only). */
+@Serializable
+data class MarkerResponse(
+    val home: MarkerData? = null,
+)
+
+@Serializable
+data class MarkerData(
+    val last_read_id: String = "",
+)
 
 /** `/api/v1/tags/{name}` payload subset. */
 @Serializable

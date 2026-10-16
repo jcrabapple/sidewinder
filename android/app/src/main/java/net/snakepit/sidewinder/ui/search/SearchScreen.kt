@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -66,7 +67,9 @@ import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.search.SearchHashtag
 import net.snakepit.sidewinder.core.search.SearchRepository
 import net.snakepit.sidewinder.core.search.recentUses
+import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.timeline.StatusCard
+import net.snakepit.sidewinder.ui.trends.TrendsColumn
 
 /**
  * Search over posts, people, and hashtags via `GET /api/v2/search`.
@@ -79,7 +82,7 @@ private const val DEBOUNCE_MS = 350L
 private const val MIN_QUERY_LENGTH = 2
 
 private val TAB_TYPES = listOf("statuses", "accounts", "hashtags")
-private val TAB_LABELS = listOf("Posts", "People", "Hashtags")
+private val TAB_LABELS = listOf("Posts", "People", "Hashtags", "Trends")
 
 /** Four mandatory states, held per tab. */
 private sealed interface SearchState {
@@ -224,7 +227,7 @@ fun SearchScreen(
         }
         delay(DEBOUNCE_MS)
         if (query.trim() != trimmed) return@LaunchedEffect // still typing
-        val type = TAB_TYPES[tab]
+        val type = TAB_TYPES.getOrNull(tab) ?: return@LaunchedEffect // Trends tab: no search
         // Only settled results count as "already searched": a Loading
         // state means a previous attempt was dropped (tab switched away
         // mid-flight), so the tab must refetch when revisited.
@@ -327,7 +330,7 @@ fun SearchScreen(
 
             val retry: () -> Unit = {
                 val trimmed = query.trim()
-                if (trimmed.length >= MIN_QUERY_LENGTH) performSearch(TAB_TYPES[tab], trimmed)
+                if (trimmed.length >= MIN_QUERY_LENGTH) TAB_TYPES.getOrNull(tab)?.let { performSearch(it, trimmed) }
             }
 
             when (tab) {
@@ -348,12 +351,22 @@ fun SearchScreen(
                     onOpenProfile = onOpenProfile,
                     onRetry = retry,
                 )
-                else -> HashtagsTab(
+                2 -> HashtagsTab(
                     state = hashtagState,
                     results = hashtagResults,
                     onOpenTag = onOpenTag,
                     onRetry = retry,
                 )
+                else -> {
+                    val actions = LocalAppActions.current
+                    val uriHandler = LocalUriHandler.current
+                    TrendsColumn(
+                        api = api,
+                        session = session,
+                        onOpenTag = onOpenTag,
+                        onOpenUrl = { url -> if (actions != null) actions.openUrl(url) else uriHandler.openUri(url) },
+                    )
+                }
             }
         }
     }

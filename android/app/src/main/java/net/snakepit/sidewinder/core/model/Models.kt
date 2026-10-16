@@ -1,6 +1,7 @@
 package net.snakepit.sidewinder.core.model
 
 import kotlinx.serialization.Serializable
+import net.snakepit.sidewinder.core.filters.FilteredStatus
 
 /** OAuth token response. Port of TokenResponse in api/types.ts. */
 @Serializable
@@ -76,6 +77,8 @@ data class Account(
     val header: String? = null,
     val locked: Boolean = false,
     val bot: Boolean = false,
+    val discoverable: Boolean? = null,
+    val indexable: Boolean? = null,
     val created_at: String = "",
     val followers_count: Long = 0,
     val following_count: Long = 0,
@@ -172,6 +175,8 @@ data class Status(
     val edited_at: String? = null,
     /** Source format of own statuses (text/plain or text/markdown) on GTS. */
     val content_type: String? = null,
+    /** Server-side filter verdicts (v2 filter + matches), when the server populates them. */
+    val filtered: List<FilteredStatus> = emptyList(),
 )
 
 @Serializable
@@ -189,6 +194,27 @@ data class Notification(
 data class StatusContext(
     val ancestors: List<Status> = emptyList(),
     val descendants: List<Status> = emptyList(),
+)
+
+/** One revision of an edited status (port of the statusEdit swagger model). */
+@Serializable
+data class StatusEdit(
+    val content: String = "",
+    val spoiler_text: String = "",
+    val sensitive: Boolean = false,
+    val created_at: String = "",
+    val media_attachments: List<MediaAttachment> = emptyList(),
+    val emojis: List<Emoji> = emptyList(),
+    val account: Account? = null,
+)
+
+/** One direct-message conversation (port of the conversation swagger model). */
+@Serializable
+data class Conversation(
+    val id: String,
+    val accounts: List<Account> = emptyList(),
+    val last_status: Status? = null,
+    val unread: Boolean = false,
 )
 
 @Serializable

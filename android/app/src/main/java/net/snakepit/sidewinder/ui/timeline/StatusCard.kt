@@ -30,9 +30,11 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -99,6 +101,7 @@ import net.snakepit.sidewinder.core.model.PreviewCard
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.quote.QuoteLinks
 import net.snakepit.sidewinder.core.text.HtmlText
 import net.snakepit.sidewinder.core.text.StatusText
 import net.snakepit.sidewinder.ui.app.LocalAppActions
@@ -431,15 +434,25 @@ private fun StatusContent(
     showMediaPreviews: Boolean = true,
     collapsible: Boolean = false,
 ) {
-    val hasBody = status.content.isNotBlank() && !StatusText.isEmptyHtml(status.content)
+    val hasBodySource = status.content.isNotBlank() && !StatusText.isEmptyHtml(status.content)
+    // Link-quote detection: a status ending in `RE: <url>` renders the
+    // quoted post as an embedded card instead of the trailing link line.
+    // Pure and remembered, so Jsoup runs once per content string.
+    val quote = remember(status.id, status.content) {
+        if (hasBodySource) QuoteLinks.detect(status.content, status.mentions, status.tags) else null
+    }
+    val bodyHtml = remember(status.content, quote) {
+        if (quote?.explicitRe == true) QuoteLinks.stripReLine(status.content, quote.url) else status.content
+    }
+    val hasBody = bodyHtml.isNotBlank() && !StatusText.isEmptyHtml(bodyHtml)
     // Long-post collapse (feeds only): plain-text length decides, expand
     // state persists in TimelineStore across scrolling and reloads.
     val isLong = collapsible && hasBody &&
-        remember(status.content) { StatusText.plain(status.content).length > COLLAPSE_THRESHOLD }
+        remember(bodyHtml) { StatusText.plain(bodyHtml).length > COLLAPSE_THRESHOLD }
     var expanded by remember(status.id) { mutableStateOf(!isLong || TimelineStore.isExpanded(status.id)) }
     if (hasBody) {
         HtmlText(
-            html = status.content,
+            html = bodyHtml,
             baseUrl = baseUrl,
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             tags = status.tags,
@@ -489,6 +502,18 @@ private fun StatusContent(
     status.poll?.let { poll ->
         Spacer(Modifier.height(8.dp))
         PollRows(poll = poll, api = api, onPollUpdated = onPollUpdated, onNotice = onNotice)
+    }
+    // The embedded quoted post, below the body. Resolution is async and
+    // never blocks this card; a bare trailing link (secondary form) stays
+    // visible in the text.
+    quote?.let { ref ->
+        Spacer(Modifier.height(8.dp))
+        QuoteBlock(
+            url = ref.url,
+            api = api,
+            baseUrl = baseUrl,
+            showMediaPreviews = showMediaPreviews,
+        )
     }
 }
 
@@ -858,8 +883,8 @@ private fun CountsRow(
     confirmBoostSetting: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    val actions = LocalAppActions.current
     // The newest status at any moment: a revert must restore only the
-    // toggled field on THIS, not the click-time snapshot, or it clobbers
     // concurrent edits that landed while the request was in flight (K9).
     val latestInner by rememberUpdatedState(status.reblog ?: status)
     val latestOuter by rememberUpdatedState(currentStatus)
@@ -867,7 +892,9 @@ private fun CountsRow(
     // second toggle cannot start before the first one settles.
     var pending by remember { mutableStateOf<String?>(null) }
     var confirmBoost by remember { mutableStateOf(false) }
-    var boostContext by remember { mutableStateOf(false) }
+    // Long-press menu anchored to the boost button: Boost/Undo boost (the
+    // confirm-before-boost setting still applies) and Quote.
+    var boostMenu by remember { mutableStateOf(false) }
     // Press sources shared between the buttons and the bouncing modifier.
     val replySource = remember { MutableInteractionSource() }
     val boostSource = remember { MutableInteractionSource() }
@@ -952,40 +979,58 @@ private fun CountsRow(
             }
             // One target for tap + long-press (IconButton has no
             // onLongClick): Box carries both, 48dp preserved. The same
-            // interaction source feeds the press animation.
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .combinedClickable(
-                        interactionSource = boostSource,
-                        indication = androidx.compose.material3.ripple(bounded = false),
-                        enabled = canBoost && pending == null,
-                        role = Role.Button,
+            // interaction source feeds the press animation. Long-press
+            // opens the Boost/Quote menu on any boostable post, boosted
+            // or not (tap unboosts; the menu still offers Quote).
+            Box {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            interactionSource = boostSource,
+                            indication = androidx.compose.material3.ripple(bounded = false),
+                            enabled = canBoost && pending == null,
+                            role = Role.Button,
+                            onClick = {
+                                if (confirmBoostSetting && !status.reblogged) confirmBoost = true else toggle("reblog", "boost", status.reblogged)
+                            },
+                            onLongClick = { boostMenu = true },
+                        )
+                        .semantics {
+                            contentDescription =
+                                if (hideCounts) {
+                                    if (status.reblogged) "Undo boost" else "Boost"
+                                } else {
+                                    if (status.reblogged) "Undo boost, ${formatCount(status.reblogs_count)} boosts" else "Boost, ${formatCount(status.reblogs_count)} boosts"
+                                }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Repeat,
+                        contentDescription = null,
+                        tint = if (status.reblogged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.bouncing(boostSource).pulseOn(status.reblogged),
+                    )
+                }
+                DropdownMenu(expanded = boostMenu, onDismissRequest = { boostMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (status.reblogged) "Undo boost" else "Boost") },
+                        leadingIcon = { Icon(Icons.Filled.Repeat, contentDescription = null) },
                         onClick = {
+                            boostMenu = false
                             if (confirmBoostSetting && !status.reblogged) confirmBoost = true else toggle("reblog", "boost", status.reblogged)
                         },
-                        onLongClick = if (!status.reblogged && canBoost) {
-                            { boostContext = true }
-                        } else {
-                            null
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Quote") },
+                        leadingIcon = { Icon(Icons.Filled.FormatQuote, contentDescription = null) },
+                        onClick = {
+                            boostMenu = false
+                            actions?.openQuote(status.id)
                         },
                     )
-                    .semantics {
-                        contentDescription =
-                            if (hideCounts) {
-                                if (status.reblogged) "Undo boost" else "Boost"
-                            } else {
-                                if (status.reblogged) "Undo boost, ${formatCount(status.reblogs_count)} boosts" else "Boost, ${formatCount(status.reblogs_count)} boosts"
-                            }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Outlined.Repeat,
-                    contentDescription = null,
-                    tint = if (status.reblogged) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.bouncing(boostSource).pulseOn(status.reblogged),
-                )
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1050,53 +1095,6 @@ private fun CountsRow(
             },
         )
     }
-
-    if (boostContext) {
-        AlertDialog(
-            onDismissRequest = { boostContext = false },
-            title = { Text("Boost this post?") },
-            text = {
-                Column {
-                    Text(
-                        "By ${status.account.display_name?.takeIf { it.isNotBlank() } ?: "@" + status.account.acct}",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    if (status.spoiler_text.isNotBlank()) {
-                        Text(
-                            "CW: ${status.spoiler_text}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
-                    Text(
-                        text = audienceLine(status.visibility),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    boostContext = false
-                    toggle("reblog", "boost", status.reblogged)
-                }) { Text("Boost") }
-            },
-            dismissButton = {
-                TextButton(onClick = { boostContext = false }) { Text("Cancel") }
-            },
-        )
-    }
-}
-
-/** Plain-language audience line for a post visibility value. */
-private fun audienceLine(visibility: String): String = when (visibility) {
-    "public" -> "Originally posted publicly."
-    "unlisted" -> "Originally posted unlisted: not on public timelines."
-    "private" -> "Originally posted to followers only."
-    "local" -> "Originally posted to this server only."
-    "direct" -> "Originally a direct post."
-    else -> "Originally posted: $visibility."
 }
 
 /**

@@ -487,6 +487,7 @@ private fun AppTabs(
             selfAccountId = session.account.id,
             openEdit = { id -> nav.navigate("compose?edit=$id") },
             openEditProfile = { nav.navigate("edit_profile") },
+            openQuote = { id -> nav.navigate("compose?quote=$id") },
         )
     }
 
@@ -731,9 +732,10 @@ private fun AppTabs(
                     )
                 }
             }
-            composable("compose?replyTo={replyTo}&share={share}&edit={edit}") { entry ->
+            composable("compose?replyTo={replyTo}&share={share}&edit={edit}&quote={quote}") { entry ->
                 val replyToId = entry.arguments?.getString("replyTo")
                 val editId = entry.arguments?.getString("edit")
+                val quoteId = entry.arguments?.getString("quote")
                 val fromShare = entry.arguments?.getString("share") == "true"
                 // Captured once per composer entry; later shares open a new entry.
                 val share = remember(entry) { if (fromShare) shareForCompose else null }
@@ -784,6 +786,22 @@ private fun AppTabs(
                         editFailed = true
                     }
                 }
+                // Quote mode: the quoted post, fetched and gated like replyTo.
+                var quoteTarget by remember(quoteId) { mutableStateOf<Status?>(null) }
+                var quoteFailed by remember(quoteId) { mutableStateOf(false) }
+                var quoteRetry by remember(quoteId) { mutableIntStateOf(0) }
+                LaunchedEffect(quoteId, quoteRetry) {
+                    if (quoteId == null) return@LaunchedEffect
+                    quoteFailed = false
+                    quoteTarget = try {
+                        ThreadRepository.status(api, quoteId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        quoteFailed = true
+                        null
+                    }
+                }
                 when {
                     editId != null -> when {
                         editFailed -> LoadFailedScreen(
@@ -805,6 +823,27 @@ private fun AppTabs(
                             onDismiss = close,
                             editing = editTarget,
                             editSourceText = editSource,
+                        )
+                    }
+                    quoteId != null -> when {
+                        quoteFailed -> LoadFailedScreen(
+                            message = "Could not load the post you are quoting. Check your connection, then retry.",
+                            onBack = { nav.popBackStack() },
+                            onRetry = {
+                                quoteFailed = false
+                                quoteRetry++
+                            },
+                        )
+                        quoteTarget == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                        else -> ComposeScreen(
+                            api = api,
+                            session = session,
+                            replyTo = null,
+                            quoting = quoteTarget,
+                            onPosted = { close() },
+                            onDismiss = close,
                         )
                     }
                     replyToId == null -> ComposeScreen(

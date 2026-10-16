@@ -529,12 +529,14 @@ private fun DisplayFilterRow(
                 onClick = { onHideSelfBoosts(!hideSelfBoosts) },
                 leadingIcon = {
                     Icon(
-                        if (hideSelfBoosts) Icons.Outlined.Reply else Icons.Outlined.Repeat,
+                        Icons.Outlined.Repeat,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
                 },
-                label = { Text(if (hideSelfBoosts) "Own boosts hidden" else "No self-boosts") },
+                // Fixed label: the selected state already shows it is on, and a
+                // longer "on" label pushed the chip past the right screen edge.
+                label = { Text("No self-boosts") },
                 modifier = Modifier
                     .heightIn(min = 48.dp)
                     .semantics {

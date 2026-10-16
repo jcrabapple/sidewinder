@@ -122,7 +122,7 @@ internal val EXPIRY_OPTIONS = listOf(
     604_800L to "7 days",
 )
 
-private enum class ComposeMode { New, Reply, Edit }
+private enum class ComposeMode { New, Reply, Quote, Edit }
 
 /**
  * Markdown composer for new posts, replies, and edits. Layout follows
@@ -154,6 +154,8 @@ fun ComposeScreen(
     editing: Status? = null,
     /** Source text of [editing] from `/statuses/{id}/source`, when available. */
     editSourceText: String? = null,
+    /** Status being quoted; switches the composer into quote mode. */
+    quoting: Status? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -163,6 +165,7 @@ fun ComposeScreen(
     val mode = when {
         editing != null -> ComposeMode.Edit
         replyTo != null -> ComposeMode.Reply
+        quoting != null -> ComposeMode.Quote
         else -> ComposeMode.New
     }
 
@@ -171,7 +174,11 @@ fun ComposeScreen(
     var spoiler by rememberSaveable { mutableStateOf("") }
     var markSensitive by rememberSaveable { mutableStateOf(false) }
     var visibility by rememberSaveable {
-        mutableStateOf(editing?.visibility ?: replyTo?.visibility ?: appSettings.defaultVisibility)
+        mutableStateOf(
+            editing?.visibility
+                ?: replyTo?.visibility
+                ?: demoteVisibility(appSettings.defaultVisibility, quoting?.visibility),
+        )
     }
     val media = rememberSaveable(saver = MediaStateSaver) { mutableStateListOf<DraftMedia>() }
     var pollOn by rememberSaveable { mutableStateOf(false) }
@@ -260,6 +267,9 @@ fun ComposeScreen(
                     cwOn = true
                     spoiler = parent.spoiler_text
                 }
+            }
+            ComposeMode.Quote -> {
+                // Commentary starts empty; the quoted card is display-only.
             }
             ComposeMode.New -> draftStore.load(session.id)?.let { draft ->
                 setTextAtEnd(draft.text)
@@ -415,17 +425,24 @@ fun ComposeScreen(
     }
 
     // ---- Validation ----
-    val used = text.codePointCount(0, text.length) + if (cwOn) spoiler.codePointCount(0, spoiler.length) else 0
+    // In quote mode the appended `RE:` line counts against the limit:
+    // the url counts as characters_reserved_per_url (25 here), plus
+    // `RE: ` and the blank line.
+    val quoteOverhead = if (mode == ComposeMode.Quote) QUOTE_OVERHEAD else 0
+    val used = text.codePointCount(0, text.length) + quoteOverhead +
+        if (cwOn) spoiler.codePointCount(0, spoiler.length) else 0
     val overLimit = used > CHAR_LIMIT
     val readyItems = media.filter { it.attachment != null }
     val missingAlt = readyItems.count { it.attachment?.description.isNullOrBlank() }
     val pollInvalid = pollOn && (pollOptions.count { it.isNotBlank() } < 2 || pollOptions.any { it.length > POLL_OPTION_LIMIT })
     val scheduleIncomplete = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs == 0L
     val hasContent = text.isNotBlank() || media.isNotEmpty()
+    // A bare link is a boost with extra steps: quote mode needs commentary.
+    val commentaryPresent = mode != ComposeMode.Quote || text.isNotBlank()
     val dirty = draftReady && fingerprint() != baseline
     // GoToSocial answers an edit that changes nothing with HTTP 422, so
     // Save stays disabled until the edit actually differs.
-    val canPost = draftReady && !posting && hasContent && !overLimit && !pollInvalid && !scheduleIncomplete &&
+    val canPost = draftReady && !posting && hasContent && commentaryPresent && !overLimit && !pollInvalid && !scheduleIncomplete &&
         media.none { it.error != null } && (mode != ComposeMode.Edit || dirty)
 
     fun submit() {
@@ -455,8 +472,15 @@ fun ComposeScreen(
                     current.mapNotNull { it.attachment?.id }
                 }
                 val sensitive = (cwOn && spoiler.isNotBlank()) || (markSensitive && current.isNotEmpty())
+                // Quote mode appends the RE line server-side text: the
+                // field holds only the commentary.
+                val statusText = if (mode == ComposeMode.Quote && quoting != null) {
+                    quotePostText(text, quoting.url ?: quoting.uri)
+                } else {
+                    text
+                }
                 val payload: JsonObject = buildJsonObject {
-                    put("status", text)
+                    put("status", statusText)
                     put("content_type", editing?.content_type ?: "text/markdown")
                     put("visibility", visibility)
                     put("spoiler_text", if (cwOn) spoiler else "")
@@ -577,11 +601,13 @@ fun ComposeScreen(
     val title = when (mode) {
         ComposeMode.Edit -> "Edit post"
         ComposeMode.Reply -> "Reply"
+        ComposeMode.Quote -> "Quote post"
         ComposeMode.New -> "New post"
     }
     val actionLabel = when (mode) {
         ComposeMode.Edit -> "Save"
         ComposeMode.Reply -> "Reply"
+        ComposeMode.Quote -> "Post"
         ComposeMode.New -> "Post"
     }
 
@@ -656,13 +682,18 @@ fun ComposeScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             replyTo?.takeIf { mode == ComposeMode.Reply }?.let { ReplyContext(it) }
+            quoting?.takeIf { mode == ComposeMode.Quote }?.let { QuoteContext(it) }
 
             AuthorRow(
                 session = session,
                 visibility = visibility,
                 locked = mode == ComposeMode.Edit,
                 onVisibilityChange = { visibility = it },
-                parentVisibility = replyTo?.takeIf { mode == ComposeMode.Reply }?.visibility,
+                parentVisibility = when (mode) {
+                    ComposeMode.Reply -> replyTo?.visibility
+                    ComposeMode.Quote -> quoting?.visibility
+                    else -> null
+                },
             )
 
             if (mode != ComposeMode.Edit && scheduleOn) {
@@ -734,6 +765,7 @@ fun ComposeScreen(
                     Text(
                         when (mode) {
                             ComposeMode.Reply -> "Write your reply"
+                            ComposeMode.Quote -> "Add your commentary"
                             ComposeMode.Edit -> "Edit your post"
                             ComposeMode.New -> "What's on your mind?"
                         },
@@ -952,6 +984,7 @@ fun ComposeScreen(
                     when (mode) {
                         ComposeMode.New -> "Keep this draft?"
                         ComposeMode.Reply -> "Discard this reply?"
+                        ComposeMode.Quote -> "Discard this quote?"
                         ComposeMode.Edit -> "Discard your changes?"
                     },
                 )

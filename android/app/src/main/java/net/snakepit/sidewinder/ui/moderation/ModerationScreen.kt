@@ -3,6 +3,14 @@
 package net.snakepit.sidewinder.ui.moderation
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -750,22 +758,19 @@ private fun AccountsTab(api: Api) {
                 .semantics { contentDescription = "Search accounts by username" },
             label = { Text("Search accounts") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { searchId++ }),
             trailingIcon = {
-                TextButton(
-                    onClick = { searchId++ },
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .semantics { contentDescription = "Run account search" },
-                ) {
-                    Text("Search")
+                IconButton(onClick = { searchId++ }) {
+                    Icon(Icons.Filled.Search, contentDescription = "Run account search")
                 }
             },
         )
         FilterChipRow(
             options = listOf(
-                "All accounts" to "all",
-                "Local only" to "local",
-                "Remote only" to "remote",
+                "All" to "all",
+                "Local" to "local",
+                "Remote" to "remote",
                 "Suspended" to "suspended",
             ),
             selected = mode,
@@ -843,7 +848,7 @@ private fun AdminAccountCard(api: Api, account: AdminAccount, onSuspended: (Admi
         }
     }
 
-    Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
                 model = account.avatarUrl,
@@ -858,49 +863,43 @@ private fun AdminAccountCard(api: Api, account: AdminAccount, onSuspended: (Admi
                     text = acct + if (isRemote) " (remote)" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+            Spacer(Modifier.width(8.dp))
+            if (isSuspended) {
+                Text(
+                    text = "Suspended",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.semantics { contentDescription = "@$acct is suspended" },
+                )
+            } else {
+                OutlinedButton(
+                    onClick = {
+                        error = null
+                        confirmSuspend = true
+                    },
+                    enabled = !busy,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics { contentDescription = "Suspend @$acct" },
+                ) {
+                    Text(if (busy) "Suspending\u2026" else "Suspend", maxLines = 1, softWrap = false)
+                }
+            }
         }
-        OutlinedTextField(
-            value = reason,
-            onValueChange = { reason = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .semantics { contentDescription = "Reason for the suspension, recorded with the action" },
-            label = { Text("Why") },
-            supportingText = { Text("Recorded with the action") },
-            singleLine = true,
-        )
-        if (isSuspended) {
+        if (suspendDone) {
             Text(
                 text = "Suspended @$acct. Lifting the suspend takes the server CLI.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-        }
-        // Full-width action row: the old trailing "Suspended"-labeled button
-        // overflowed narrow cards; the button names its action and spans.
-        Button(
-            onClick = { confirmSuspend = true },
-            enabled = !busy && !isSuspended,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp)
-                .heightIn(min = 48.dp)
-                .semantics { contentDescription = "Suspend @$acct" },
-        ) {
-            Text(
-                when {
-                    busy -> "Suspending\u2026"
-                    isSuspended -> "Suspended"
-                    else -> "Suspend"
-                },
+                modifier = Modifier.padding(top = 6.dp, start = 52.dp),
             )
         }
         error?.let {
@@ -908,7 +907,7 @@ private fun AdminAccountCard(api: Api, account: AdminAccount, onSuspended: (Admi
                 text = it,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = 6.dp, start = 52.dp),
             )
         }
     }
@@ -918,13 +917,26 @@ private fun AdminAccountCard(api: Api, account: AdminAccount, onSuspended: (Admi
             onDismissRequest = { confirmSuspend = false },
             title = { Text(text = "Suspend @$acct?") },
             text = {
-                Text(
-                    text = (if (isRemote) {
-                        "Their instance still hosts the account; this instance stops ingesting their content."
-                    } else {
-                        "Their profile becomes inaccessible and their content is dropped."
-                    }) + " GoToSocial has no API to undo a suspend. Lifting one takes the server CLI.",
-                )
+                Column {
+                    Text(
+                        text = (if (isRemote) {
+                            "Their instance still hosts the account; this instance stops ingesting their content."
+                        } else {
+                            "Their profile becomes inaccessible and their content is dropped."
+                        }) + " GoToSocial has no API to undo a suspend. Lifting one takes the server CLI.",
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .semantics { contentDescription = "Reason for the suspension, recorded with the action" },
+                        label = { Text("Reason (optional)") },
+                        supportingText = { Text("Recorded with the action") },
+                        singleLine = true,
+                    )
+                }
             },
             confirmButton = {
                 TextButton(
@@ -1239,13 +1251,18 @@ private fun <T> FilterChipRow(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Scrolls sideways instead of squeezing: a squeezed chip wrapped its
+    // label one letter per line down the right edge.
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         options.forEach { (label, value) ->
             val isSelected = value == selected
             FilterChip(
                 selected = isSelected,
                 onClick = { onSelect(value) },
-                label = { Text(label) },
+                label = { Text(label, maxLines = 1, softWrap = false) },
                 // FilterChip announces its own selected state; a manual
                 // ", selected" in the description made screen readers say it twice.
                 modifier = Modifier

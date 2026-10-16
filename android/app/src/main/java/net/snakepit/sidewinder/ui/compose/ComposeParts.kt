@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
+import net.snakepit.sidewinder.core.text.StatusText
 import org.jsoup.Jsoup
 
 /** Capitalize sentences everywhere the user writes prose (posts, CW, alt text, polls). */
@@ -130,6 +131,48 @@ internal fun ReplyContext(parent: Status) {
         Column(Modifier.weight(1f)) {
             Text(
                 "Replying to $name",
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                excerpt,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** The post being quoted, shown above the composer (reply-context styling). */
+@Composable
+internal fun QuoteContext(quoted: Status) {
+    val name = quoted.account.display_name?.takeIf { it.isNotBlank() } ?: quoted.account.username
+    val excerpt = remember(quoted.id) {
+        quoted.spoiler_text.takeIf { it.isNotBlank() }?.let { "CW: $it" }
+            ?: StatusText.plain(quoted.content)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(12.dp)
+            .semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        AsyncImage(
+            model = quoted.account.avatar_static?.ifEmpty { quoted.account.avatar } ?: quoted.account.avatar,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Quoting $name",
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

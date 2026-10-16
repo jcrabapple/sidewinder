@@ -121,3 +121,26 @@ internal fun editMediaIds(
     val retained = originalIds.filter { it !in keptSet && it !in removedIds }
     return kept + retained
 }
+
+// ---- Quote mode -----------------------------------------------------------
+
+/**
+ * The URL's counted length on this instance: gts.example.org reports
+ * characters_reserved_per_url = 25, so a link counts as 25 characters
+ * no matter how long it is.
+ */
+internal const val QUOTE_URL_WEIGHT = 25
+
+/** `RE: ` (4) + blank line (2) + the url (25). */
+internal const val QUOTE_OVERHEAD = QUOTE_URL_WEIGHT + 4 + 2
+
+/** The full status text for a quote post: commentary, blank line, RE line. */
+internal fun quotePostText(commentary: String, quotedUrl: String): String =
+    commentary.trimEnd() + "\n\nRE: " + quotedUrl
+
+/**
+ * The quote post's default visibility: the user's default, but never more
+ * public than the quoted post (same demotion rule as replies).
+ */
+internal fun demoteVisibility(default: String, parent: String?): String =
+    if (parent != null && visibilityRank(parent) > visibilityRank(default)) parent else default

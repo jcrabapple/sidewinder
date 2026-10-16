@@ -86,6 +86,37 @@ internal fun mixTowardBackground(accent: Color, bg: Color, fraction: Float): Col
  * [pureBlack] (dark only) pushes background, surface and the two lowest
  * containers to pure black and keeps everything else.
  */
+/** WCAG relative luminance (sRGB). */
+private fun relLum(c: Color): Double {
+    fun lin(x: Float): Double { val v = x.toDouble(); return if (v <= 0.03928) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4) }
+    return 0.2126 * lin(c.red) + 0.7152 * lin(c.green) + 0.0722 * lin(c.blue)
+}
+
+private fun contrast(a: Color, b: Color): Double {
+    val la = relLum(a); val lb = relLum(b)
+    return (maxOf(la, lb) + 0.05) / (minOf(la, lb) + 0.05)
+}
+
+/** The palette ink that reads best on [container] (no new colors invented). */
+private fun ThemePalette.bestInkOn(container: Color): Color =
+    listOf(fg, onAccentContainer, onAccent, bg).maxBy { contrast(it, container) }
+
+/**
+ * [hue] tinted into [ground] at the strongest fraction (up to [maxFraction])
+ * whose best palette ink still reads at 4.5:1. Low-contrast palettes
+ * (Tokyo Night Day) step down toward the plain ground, which the theme's
+ * own text pair already clears.
+ */
+private fun ThemePalette.readableTint(hue: Color, ground: Color, maxFraction: Float): Color {
+    var f = maxFraction
+    while (f > 0f) {
+        val c = mixTowardBackground(hue, ground, f)
+        if (contrast(bestInkOn(c), c) >= 4.5) return c
+        f -= 0.025f
+    }
+    return ground
+}
+
 fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
     val bg = if (dark && pureBlack) PureBlack else this.bg
     val surface = if (dark && pureBlack) PureBlack else this.surface
@@ -113,6 +144,21 @@ fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
         outlineVariant = outlineVariant,
         error = danger,
         onError = bg,
+        // Selection highlights (FilterChip, NavigationBar indicator,
+        // SegmentedButton) paint secondaryContainer; leaving it unset fell
+        // back to the Material baseline purple on every theme.
+        secondaryContainer = accentContainer,
+        onSecondaryContainer = onAccentContainer,
+        tertiaryContainer = readableTint(warn, bg, 0.25f),
+        onTertiaryContainer = bestInkOn(readableTint(warn, bg, 0.25f)),
+        errorContainer = readableTint(danger, bg, 0.25f),
+        onErrorContainer = bestInkOn(readableTint(danger, bg, 0.25f)),
+        inverseSurface = fg,
+        inverseOnSurface = bg,
+        inversePrimary = accentContainer,
+        surfaceTint = accent,
+        surfaceBright = surface3,
+        surfaceDim = bg,
     ) else lightColorScheme(
         primary = accent,
         onPrimary = onAccent,
@@ -137,6 +183,18 @@ fun ThemePalette.toColorScheme(dark: Boolean, pureBlack: Boolean): ColorScheme {
         outlineVariant = outlineVariant,
         error = danger,
         onError = surface,
+        secondaryContainer = accentContainer,
+        onSecondaryContainer = onAccentContainer,
+        tertiaryContainer = readableTint(warn, surface, 0.2f),
+        onTertiaryContainer = bestInkOn(readableTint(warn, surface, 0.2f)),
+        errorContainer = readableTint(danger, surface, 0.2f),
+        onErrorContainer = bestInkOn(readableTint(danger, surface, 0.2f)),
+        inverseSurface = fg,
+        inverseOnSurface = surface,
+        inversePrimary = accentContainer,
+        surfaceTint = accent,
+        surfaceBright = surface,
+        surfaceDim = surface3,
     )
 }
 

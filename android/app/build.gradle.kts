@@ -81,4 +81,5 @@ dependencies {
     implementation(libs.androidx.work)
 
     testImplementation(libs.junit)
+    testImplementation(libs.mockwebserver)
 }

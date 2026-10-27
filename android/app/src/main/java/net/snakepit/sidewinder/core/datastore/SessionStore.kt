@@ -11,6 +11,9 @@ import kotlinx.serialization.json.Json
 import net.snakepit.sidewinder.core.model.AccountCredentials
 import net.snakepit.sidewinder.core.model.Session
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Signed-in sessions, persisted at filesDir/sidewinder/sessions.json together
@@ -30,17 +33,13 @@ class SessionStore(context: Context) {
     )
 
     @Serializable
-    private data class SessionFile(
+    internal data class SessionFile(
         val sessions: List<StoredSession> = emptyList(),
         val activeId: String? = null,
     )
 
     private val dir = File(context.applicationContext.filesDir, "sidewinder")
     private val file = File(dir, "sessions.json")
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-    }
 
     /**
      * Guards every read-modify-write cycle so concurrent callers cannot
@@ -55,25 +54,19 @@ class SessionStore(context: Context) {
     private fun Session.toStored() = StoredSession(id, base, token, account, scopes)
 
     private suspend fun read(): SessionFile = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext SessionFile()
-        try {
-            json.decodeFromString(SessionFile.serializer(), file.readText())
-        } catch (_: Exception) {
-            // Corrupt or unreadable store: start over rather than fail sign-in.
-            SessionFile()
-        }
+        decodeSessionFile(if (file.exists()) file.readText() else null)
     }
 
     private suspend fun write(data: SessionFile) = withContext(Dispatchers.IO) {
         dir.mkdirs()
         val tmp = File(dir, "sessions.json.tmp")
-        tmp.writeText(json.encodeToString(SessionFile.serializer(), data))
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            if (!tmp.renameTo(file)) {
-                tmp.delete()
-                throw IllegalStateException("Could not save sessions. Free up storage and try again.")
-            }
+        tmp.writeText(sessionsJson.encodeToString(SessionFile.serializer(), data))
+        try {
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            // REPLACE_EXISTING swaps the directory entry without deleting
+            // the last good session file first.
+            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
 
@@ -96,8 +89,8 @@ class SessionStore(context: Context) {
 
     suspend fun setActive(id: String) = mutex.withLock {
         val data = read()
-        require(data.sessions.any { it.id == id }) { "Unknown session id: $id" }
-        write(data.copy(activeId = id))
+        val updated = activateSession(data, id)
+        if (updated != data) write(updated)
     }
 
     suspend fun remove(id: String) = mutex.withLock {
@@ -111,6 +104,23 @@ class SessionStore(context: Context) {
         write(SessionFile(sessions, activeId))
     }
 }
+
+private val sessionsJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+}
+
+/** A null document represents a missing file; every present document must decode. */
+internal fun decodeSessionFile(contents: String?): SessionStore.SessionFile =
+    if (contents == null) {
+        SessionStore.SessionFile()
+    } else {
+        sessionsJson.decodeFromString(SessionStore.SessionFile.serializer(), contents)
+    }
+
+/** Unknown ids leave the complete persisted state untouched. */
+internal fun activateSession(data: SessionStore.SessionFile, id: String): SessionStore.SessionFile =
+    if (data.sessions.any { it.id == id }) data.copy(activeId = id) else data
 
 /**
  * Merge [incoming] into [existing]: replace by id, and replace a stored

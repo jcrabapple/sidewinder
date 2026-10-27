@@ -52,11 +52,11 @@ import kotlinx.coroutines.launch
 import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
+import net.snakepit.sidewinder.core.schedule.ScheduleDates
 import net.snakepit.sidewinder.core.schedule.ScheduledOps
 import net.snakepit.sidewinder.core.schedule.ScheduledRepository
 import net.snakepit.sidewinder.core.schedule.ScheduledStatus
 import java.time.Instant
-import java.time.LocalDate
 import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -302,7 +302,9 @@ private fun RescheduleDialog(currentIso: String, onDismiss: () -> Unit, onConfir
 
     when (step) {
         Step.Date -> {
-            val dateState = rememberDatePickerState(initialSelectedDateMillis = currentMs)
+            val dateState = rememberDatePickerState(
+                initialSelectedDateMillis = ScheduleDates.pickerSeed(currentMs, ZoneId.systemDefault()),
+            )
             DatePickerDialog(
                 onDismissRequest = onDismiss,
                 confirmButton = {
@@ -336,16 +338,17 @@ private fun RescheduleDialog(currentIso: String, onDismiss: () -> Unit, onConfir
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            val date = dateMs?.let { Instant.ofEpochMilli(it).atZone(ZoneId.of("UTC")).toLocalDate() }
-                            if (date == null) {
+                            val picked = dateMs ?: run {
                                 step = Step.Date
                                 return@TextButton
                             }
-                            val candidate = date.atTime(timeState.hour, timeState.minute)
-                                .atZone(ZoneId.systemDefault())
-                                .toInstant()
-                                .toEpochMilli()
-                            if (candidate >= System.currentTimeMillis() + 5 * 60_000L) {
+                            val candidate = ScheduleDates.localInstant(
+                                pickerMillis = picked,
+                                hour = timeState.hour,
+                                minute = timeState.minute,
+                                zone = ZoneId.systemDefault(),
+                            )
+                            if (ScheduleDates.isFutureEnough(candidate, System.currentTimeMillis())) {
                                 onConfirm(candidate)
                             } else {
                                 error = "Scheduled posts must be at least 5 minutes in the future. Pick a later time."

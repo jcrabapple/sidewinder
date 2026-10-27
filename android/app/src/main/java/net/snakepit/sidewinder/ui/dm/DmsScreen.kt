@@ -63,7 +63,12 @@ internal sealed interface DmsState {
     data object Loading : DmsState
     data class Error(val message: String) : DmsState
     data object Empty : DmsState
-    data class Content(val items: List<Conversation>, val nextMaxId: String?, val loadingMore: Boolean) : DmsState
+    data class Content(
+        val items: List<Conversation>,
+        val nextMaxId: String?,
+        val loadingMore: Boolean,
+        val loadMoreFailed: Boolean = false,
+    ) : DmsState
 }
 
 /**
@@ -103,6 +108,7 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    var failedPagePosition by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     suspend fun loadFirstPage() {
         state = DmsState.Loading
@@ -122,21 +128,28 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
         val current = state as? DmsState.Content ?: return
         val maxId = current.nextMaxId ?: return
         if (current.loadingMore) return
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreFailed = false)
         scope.launch {
             try {
                 val page = ConversationsRepository.list(api, session.token, maxId)
                 val base = (state as? DmsState.Content)?.items ?: current.items
                 val ids = base.mapTo(HashSet()) { it.id }
                 state = DmsState.Content(base + page.items.filterNot { it.id in ids }, page.nextMaxId, false)
+                failedPagePosition = null
             } catch (e: ApiError) {
-                (state as? DmsState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                scope.launch { snackbar.showSnackbar("Could not load older conversations: the server returned error ${e.status}. Scroll to try again.") }
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? DmsState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
+                scope.launch { snackbar.showSnackbar("Could not load older conversations: the server returned error ${e.status}. Scroll or tap Retry to try again.") }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                (state as? DmsState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                scope.launch { snackbar.showSnackbar("Could not load older conversations: ${e.message ?: "network error"}. Scroll to try again.") }
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? DmsState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
+                scope.launch { snackbar.showSnackbar("Could not load older conversations: ${e.message ?: "network error"}. Scroll or tap Retry to try again.") }
             }
         }
     }
@@ -144,11 +157,14 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
     LaunchedEffect(api, session.id) { loadFirstPage() }
     LaunchedEffect(listState) {
         snapshotFlow {
+            val position = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? DmsState.Content ?: return@collect
+            val paging = (state as? DmsState.Content)?.let { it.loadingMore to it.loadMoreFailed }
+            Triple(position, lastVisible, paging)
+        }.collect { (position, lastVisible, _) ->
+            val current = state as? DmsState.Content ?: return@collect
             if (current.nextMaxId == null || current.loadingMore) return@collect
+            if (current.loadMoreFailed && position == failedPagePosition) return@collect
             if (lastVisible >= current.items.size - 3) loadNextPage()
         }
     }
@@ -234,6 +250,27 @@ fun DmsScreen(api: Api, session: Session, onOpenThread: (String) -> Unit) {
                             CircularProgressIndicator(
                                 modifier = Modifier.semantics { contentDescription = "Loading older conversations" },
                             )
+                        }
+                    }
+                } else if (s.loadMoreFailed) {
+                    item(key = "load-more-error") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = "Could not load older conversations.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = { loadNextPage() },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .semantics { contentDescription = "Retry loading older conversations" },
+                            ) {
+                                Text("Retry")
+                            }
                         }
                     }
                 }

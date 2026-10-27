@@ -112,9 +112,7 @@ export function StatusCard({ status: outer, variant = 'timeline', onStatusUpdate
               </span>
             )}
           </a>
-          {variant !== 'thread' && (
-            <MoreMenu status={status} own={status.account.id === me} onUpdated={updated} onDeleted={onStatusDeleted} />
-          )}
+          <MoreMenu status={status} own={status.account.id === me} onUpdated={updated} onDeleted={onStatusDeleted} />
         </div>
       </div>
 

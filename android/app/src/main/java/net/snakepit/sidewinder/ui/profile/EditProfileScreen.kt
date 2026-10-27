@@ -58,15 +58,13 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.profile.ProfileRepository
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
+import net.snakepit.sidewinder.core.profile.VerifiedProfile
 import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
 private sealed interface EditState {
     data object Loading : EditState
     data class Error(val message: String) : EditState
-    data class Content(val account: Account) : EditState
+    data class Content(val account: Account, val verified: VerifiedProfile) : EditState
 }
 
 /**
@@ -85,7 +83,9 @@ fun EditProfileScreen(api: Api, session: Session, onSaved: () -> Unit) {
     suspend fun load() {
         state = EditState.Loading
         state = try {
-            EditState.Content(ProfileRepository.account(api, session.account.id))
+            val account = ProfileRepository.account(api, session.account.id)
+            val verified = ProfileRepository.verifiedProfile(api)
+            EditState.Content(account, verified)
         } catch (e: ApiError) {
             EditState.Error("Could not load your profile: the server returned error ${e.status}. Check your connection, then retry.")
         } catch (e: CancellationException) {
@@ -124,6 +124,7 @@ fun EditProfileScreen(api: Api, session: Session, onSaved: () -> Unit) {
 
             is EditState.Content -> EditForm(
                 account = s.account,
+                verified = s.verified,
                 api = api,
                 session = session,
                 onSaved = onSaved,
@@ -137,6 +138,7 @@ fun EditProfileScreen(api: Api, session: Session, onSaved: () -> Unit) {
 @Composable
 private fun EditForm(
     account: Account,
+    verified: VerifiedProfile,
     api: Api,
     session: Session,
     onSaved: () -> Unit,
@@ -144,16 +146,16 @@ private fun EditForm(
     modifier: Modifier = Modifier,
 ) {
     var displayName by rememberSaveable { mutableStateOf(account.display_name.orEmpty()) }
-    var note by rememberSaveable { mutableStateOf(account.note) }
+    var note by rememberSaveable { mutableStateOf(verified.source.note) }
     var locked by rememberSaveable { mutableStateOf(account.locked) }
     var discoverable by rememberSaveable { mutableStateOf(account.discoverable ?: true) }
     var indexable by rememberSaveable { mutableStateOf(account.indexable ?: true) }
     var avatarUri by rememberSaveable { mutableStateOf<android.net.Uri?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var avatarDescription by rememberSaveable { mutableStateOf("") }
+    var avatarDescription by rememberSaveable { mutableStateOf(verified.avatar_description.orEmpty()) }
     var headerUri by rememberSaveable { mutableStateOf<android.net.Uri?>(null) }
-    var headerDescription by rememberSaveable { mutableStateOf("") }
+    var headerDescription by rememberSaveable { mutableStateOf(verified.header_description.orEmpty()) }
     var saving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
 
@@ -164,13 +166,20 @@ private fun EditForm(
         if (uri != null) headerUri = uri
     }
 
+    val imageEdits = ProfileImageEdits(
+        initialAvatarDescription = verified.avatar_description.orEmpty(),
+        initialHeaderDescription = verified.header_description.orEmpty(),
+        avatarDescription = avatarDescription,
+        headerDescription = headerDescription,
+        avatarSelected = avatarUri != null,
+        headerSelected = headerUri != null,
+    )
     val dirty = displayName != account.display_name.orEmpty() ||
-        note != account.note ||
+        note != verified.source.note ||
         locked != account.locked ||
         discoverable != (account.discoverable ?: true) ||
         indexable != (account.indexable ?: true) ||
-        avatarUri != null ||
-        headerUri != null
+        imageEdits.dirty
 
     Column(
         modifier = modifier
@@ -205,16 +214,15 @@ private fun EditForm(
                     .semantics { contentDescription = "Choose a new header image" },
             ) { Text(if (headerUri != null) "Change header" else "Choose header") }
         }
-        if (headerUri != null) {
-            OutlinedTextField(
-                value = headerDescription,
-                onValueChange = { headerDescription = it },
-                label = { Text("Header description (alt text)") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Describe the header image" },
-            )
-        }
+        OutlinedTextField(
+            value = headerDescription,
+            onValueChange = { headerDescription = it },
+            label = { Text("Header description (alt text)") },
+            supportingText = { Text("Leave empty to remove the description") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Describe the header image" },
+        )
 
         // Avatar preview + picker.
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -236,16 +244,15 @@ private fun EditForm(
                     .semantics { contentDescription = "Choose a new avatar image" },
             ) { Text(if (avatarUri != null) "Change avatar" else "Choose avatar") }
         }
-        if (avatarUri != null) {
-            OutlinedTextField(
-                value = avatarDescription,
-                onValueChange = { avatarDescription = it },
-                label = { Text("Avatar description (alt text)") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "Describe the avatar image" },
-            )
-        }
+        OutlinedTextField(
+            value = avatarDescription,
+            onValueChange = { avatarDescription = it },
+            label = { Text("Avatar description (alt text)") },
+            supportingText = { Text("Leave empty to remove the description") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "Describe the avatar image" },
+        )
 
         OutlinedTextField(
             value = displayName,
@@ -300,6 +307,7 @@ private fun EditForm(
             onClick = {
                 saving = true
                 saveError = null
+                val descriptionFields = imageEdits.descriptionFields()
                 scope.launch {
                     try {
                         // Text fields first: a failed image upload must not
@@ -311,6 +319,8 @@ private fun EditForm(
                             locked = locked,
                             discoverable = discoverable,
                             indexable = indexable,
+                            avatarDescription = descriptionFields["avatar_description"].takeIf { avatarUri == null },
+                            headerDescription = descriptionFields["header_description"].takeIf { headerUri == null },
                         )
                         // Image parts ride as multipart PATCH (avatar/header
                         // are type:file on update_credentials). MIME and
@@ -340,11 +350,9 @@ private fun EditForm(
                                 filename = filename,
                                 mediaType = mediaType,
                                 bytes = bytes,
-                                fields = if (headerDescription.isNotBlank()) {
-                                    mapOf("header_description" to headerDescription)
-                                } else {
-                                    emptyMap()
-                                },
+                                fields = descriptionFields["header_description"]
+                                    ?.let { mapOf("header_description" to it) }
+                                    .orEmpty(),
                                 method = "PATCH",
                             )
                         }
@@ -357,11 +365,9 @@ private fun EditForm(
                                 filename = filename,
                                 mediaType = mediaType,
                                 bytes = bytes,
-                                fields = if (avatarDescription.isNotBlank()) {
-                                    mapOf("avatar_description" to avatarDescription)
-                                } else {
-                                    emptyMap()
-                                },
+                                fields = descriptionFields["avatar_description"]
+                                    ?.let { mapOf("avatar_description" to it) }
+                                    .orEmpty(),
                                 method = "PATCH",
                             )
                         }

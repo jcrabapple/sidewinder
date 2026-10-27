@@ -66,8 +66,10 @@ export function ProfileView({ id }: { id: string }) {
   }
 
   async function loadStatuses(reset: boolean, activeTab: Tab) {
+    if (!reset && loadingMore) return
     const seq = ++requestSeq.current
     if (reset) {
+      setLoadingMore(false)
       setListState('loading')
       setStatuses([])
       setNextMaxId(null)

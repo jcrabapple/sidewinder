@@ -27,12 +27,38 @@ data class DraftMediaRef(
     val attachment: MediaAttachment,
 )
 
+/**
+ * One text-only follow-up in a saved thread. [key] is the segment's
+ * Idempotency-Key, kept so a resumed retry reuses the same request identity.
+ */
+@Serializable
+data class DraftChainSegment(
+    val key: String,
+    val text: String = "",
+)
+
 @Serializable
 data class ComposeDraft(
     val text: String = "",
     val cw: Boolean = false,
     val spoiler: String = "",
+    /** Media-sensitivity toggle (the eye in the toolbar), independent of the CW. */
+    val markSensitive: Boolean = false,
     val visibility: String = "public",
+    /** ISO 639-1 post language; blank means "let the server decide". */
+    val language: String = "",
+    /** Root post's Idempotency-Key, stable across retries and restarts. */
+    val rootKey: String = "",
+    /** Text-only follow-up posts, in order. */
+    val chain: List<DraftChainSegment> = emptyList(),
+    /**
+     * Posts already published in this thread, root included (0 = nothing
+     * published). Lets a restored draft resume after a partial failure
+     * without reposting successes.
+     */
+    val postedCount: Int = 0,
+    /** Id of the last published post; the parent of the next chain segment. */
+    val chainParentId: String = "",
     val media: List<DraftMediaRef> = emptyList(),
     val pollOn: Boolean = false,
     val pollOptions: List<String> = emptyList(),

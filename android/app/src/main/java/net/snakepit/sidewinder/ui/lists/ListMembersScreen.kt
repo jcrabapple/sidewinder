@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -26,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -70,6 +71,7 @@ private sealed interface MembersState {
         val members: List<Account>,
         val nextMaxId: String?,
         val loadingMore: Boolean,
+        val loadMoreFailed: Boolean = false,
     ) : MembersState
 }
 
@@ -108,17 +110,7 @@ fun ListMembersScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
-
-    // Failed load-more pages back off exponentially, so a persistent
-    // failure at the tail cannot retry in a tight infinite loop.
-    var pageFailures by remember { mutableStateOf(0) }
-    var nextRetryAtMs by remember { mutableStateOf(0L) }
-
-    // Every id on the list right now, including optimistic removals and
-    // additions, so Add buttons and the search panel stay consistent.
-    val memberIds = remember(state) {
-        (state as? MembersState.Content)?.members?.mapTo(HashSet()) { it.id } ?: HashSet()
-    }
+    var failedPagePosition by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     suspend fun loadFirstPage() {
         state = MembersState.Loading
@@ -143,7 +135,7 @@ fun ListMembersScreen(
         val maxId = current.nextMaxId ?: return
         if (current.loadingMore) return
 
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreFailed = false)
         scope.launch {
             try {
                 val page = ListsRepository.members(api, listId, maxId)
@@ -151,20 +143,21 @@ fun ListMembersScreen(
                 val baseIds = base.mapTo(HashSet()) { it.id }
                 val fresh = page.items.filterNot { it.id in baseIds }
                 state = MembersState.Content(base + fresh, page.nextMaxId, loadingMore = false)
-                pageFailures = 0
-                nextRetryAtMs = 0L
+                failedPagePosition = null
             } catch (e: ApiError) {
-                pageFailures++
-                nextRetryAtMs = System.currentTimeMillis() + ListMembersLogic.PageRetry.delayMs(pageFailures)
-                (state as? MembersState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                snackbarHostState.showSnackbar("Could not load older members: the server returned error ${e.status}. Scroll to try again.")
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? MembersState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
+                snackbarHostState.showSnackbar("Could not load older members: the server returned error ${e.status}. Scroll or tap Retry to try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                pageFailures++
-                nextRetryAtMs = System.currentTimeMillis() + ListMembersLogic.PageRetry.delayMs(pageFailures)
-                (state as? MembersState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                snackbarHostState.showSnackbar("Could not load older members: ${e.message ?: "network error"}. Scroll to try again.")
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? MembersState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
+                snackbarHostState.showSnackbar("Could not load older members: ${e.message ?: "network error"}. Scroll or tap Retry to try again.")
             }
         }
     }
@@ -262,15 +255,20 @@ fun ListMembersScreen(
 
     LaunchedEffect(api, session.id, listId) { loadFirstPage() }
 
-    // Infinite scroll, one page ahead of the last visible member.
+    // Infinite scroll, one page ahead of the last visible member. Only the
+    // scroll position and the paging flags drive re-evaluation, so unrelated
+    // list edits cannot relaunch a failed page. After a failure a real scroll
+    // (position change) or the inline Retry is required.
     LaunchedEffect(listState) {
         snapshotFlow {
+            val position = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? MembersState.Content ?: return@collect
+            val paging = (state as? MembersState.Content)?.let { it.loadingMore to it.loadMoreFailed }
+            Triple(position, lastVisible, paging)
+        }.collect { (position, lastVisible, _) ->
+            val current = state as? MembersState.Content ?: return@collect
             if (current.nextMaxId == null || current.loadingMore) return@collect
-            if (System.currentTimeMillis() < nextRetryAtMs) return@collect
+            if (current.loadMoreFailed && position == failedPagePosition) return@collect
             if (lastVisible >= current.members.size - 3) loadNextPage()
         }
     }
@@ -324,7 +322,7 @@ fun ListMembersScreen(
                         modifier = Modifier.size(48.dp),
                     ) {
                         Icon(
-                            Icons.Filled.Notes,
+                            Icons.AutoMirrored.Filled.Notes,
                             contentDescription = "Open the $listTitle timeline",
                         )
                     }
@@ -440,6 +438,27 @@ fun ListMembersScreen(
                                 CircularProgressIndicator(
                                     modifier = Modifier.semantics { contentDescription = "Loading older members" },
                                 )
+                            }
+                        }
+                    } else if (s.loadMoreFailed) {
+                        item(key = "load-more-error") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    text = "Could not load older members.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                TextButton(
+                                    onClick = { loadNextPage() },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .semantics { contentDescription = "Retry loading older members" },
+                                ) {
+                                    Text("Retry")
+                                }
                             }
                         }
                     }

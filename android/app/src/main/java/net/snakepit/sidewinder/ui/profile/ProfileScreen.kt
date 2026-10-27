@@ -63,6 +63,7 @@ import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
 import net.snakepit.sidewinder.ui.mutes.MuteDialog
 import net.snakepit.sidewinder.ui.timeline.StatusCard
+import net.snakepit.sidewinder.ui.timeline.TimelineStore
 
 /** Account-header fetch state; the header survives tab switches. */
 private sealed interface HeaderState {
@@ -83,6 +84,7 @@ private data class TabListState(
     val items: List<Status> = emptyList(),
     val nextMaxId: String? = null,
     val loadingMore: Boolean = false,
+    val pinnedIds: Set<String> = emptySet(),
 )
 
 /**
@@ -119,6 +121,7 @@ fun ProfileScreen(
     val isSelf = accountId == session.account.id
     val settings = LocalAppSettings.current
     var confirmFollow by remember { mutableStateOf(false) }
+    var confirmBlock by remember { mutableStateOf(false) }
     var muteDialogOpen by remember { mutableStateOf(false) }
     var noteDialogOpen by remember { mutableStateOf(false) }
 
@@ -175,10 +178,19 @@ fun ProfileScreen(
         tabs = tabs + (tab to TabListState(loading = true))
         scope.launch {
             try {
+                val pinned = if (tab == ProfileRepository.StatusesTab.Posts) {
+                    ProfileRepository.pinnedStatuses(api, accountId)
+                } else {
+                    emptyList()
+                }
                 val page = ProfileRepository.statuses(api, accountId, tab = tab)
                 if (seq != statusSeq) return@launch
-                val fresh = page.items.distinctBy { it.id }
-                tabs = tabs + (tab to TabListState(items = fresh, nextMaxId = page.nextMaxId))
+                val fresh = ProfileTabUpdates.mergedPosts(pinned, page.items)
+                tabs = tabs + (tab to TabListState(
+                    items = fresh,
+                    nextMaxId = page.nextMaxId,
+                    pinnedIds = pinned.mapTo(HashSet()) { it.id },
+                ))
             } catch (e: ApiError) {
                 if (seq != statusSeq) return@launch
                 tabs = tabs + (tab to TabListState(error = "Could not load these posts: the server returned error ${e.status}. Check your connection, then retry."))
@@ -196,6 +208,7 @@ fun ProfileScreen(
     }
 
     fun updateStatus(updated: Status) {
+        TimelineStore.applyEdit(updated.reblog ?: updated)
         // Apply to every cached tab, including inside boost wrappers,
         // so a favourite or edit on one tab cannot go stale on another (K37).
         tabs = tabs.mapValues { (_, tabState) ->
@@ -215,10 +228,14 @@ fun ProfileScreen(
             try {
                 val page = ProfileRepository.statuses(api, accountId, maxId, tab = tab)
                 if (seq != statusSeq) return@launch
-                val base = tabs[tab]?.items ?: current.items
-                val baseIds = base.mapTo(HashSet()) { it.id }
+                val latest = tabs[tab] ?: current
+                val baseIds = latest.items.mapTo(HashSet()) { it.id }
                 val fresh = page.items.filterNot { it.id in baseIds }
-                tabs = tabs + (tab to TabListState(items = base + fresh, nextMaxId = page.nextMaxId))
+                tabs = tabs + (tab to latest.copy(
+                    items = latest.items + fresh,
+                    nextMaxId = page.nextMaxId,
+                    loadingMore = false,
+                ))
             } catch (e: ApiError) {
                 if (seq != statusSeq) return@launch
                 tabs[tab]?.let { latest -> tabs = tabs + (tab to latest.copy(loadingMore = false)) }
@@ -235,7 +252,7 @@ fun ProfileScreen(
 
     fun toggleFollow() {
         val rel = relationship ?: return
-        if (relBusy) return
+        if (relBusy || rel.blocking) return
         val previous = rel
         // Optimistic: assume the call lands; revert to `previous` on error.
         relationship = if (previous.following || previous.requested) {
@@ -269,22 +286,69 @@ fun ProfileScreen(
     /** Instant unmute; muting goes through [MuteDialog] to pick a duration. */
     fun unmuteAccount() {
         val rel = relationship ?: return
-        if (relBusy) return
+        if (relBusy || rel.blocking) return
         val previous = rel
         relationship = previous.copy(muting = false)
         relBusy = true
         scope.launch {
             try {
-                MuteRepository.unmute(api, session.token, accountId)
-                relationship = ProfileRepository.relationship(api, accountId)
+                try {
+                    MuteRepository.unmute(api, session.token, accountId)
+                } catch (e: ApiError) {
+                    relationship = previous
+                    showNotice("Could not unmute: the server returned error ${e.status}. Your previous state was restored; try again.")
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    relationship = previous
+                    showNotice("Could not unmute: ${e.message ?: "network error"}. Your previous state was restored; try again.")
+                    return@launch
+                }
+
+                // The unmute already succeeded. A failed refresh must not roll it back.
+                try {
+                    ProfileRepository.relationship(api, accountId)?.let { relationship = it }
+                    relError = false
+                } catch (e: ApiError) {
+                    relError = true
+                    showNotice("Account unmuted, but the relationship could not be refreshed (server error ${e.status}). The account remains unmuted; retry the refresh later.")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    relError = true
+                    showNotice("Account unmuted, but the relationship could not be refreshed: ${e.message ?: "network error"}. The account remains unmuted; retry the refresh later.")
+                }
+            } finally {
+                relBusy = false
+            }
+        }
+    }
+
+    fun toggleBlock() {
+        val previous = relationship ?: return
+        if (relBusy) return
+        val blocking = !previous.blocking
+        relError = false
+        relBusy = true
+        scope.launch {
+            try {
+                relationship = if (blocking) {
+                    ProfileRepository.block(api, accountId)
+                } else {
+                    ProfileRepository.unblock(api, accountId)
+                }
+                showNotice(if (blocking) "Account blocked." else "Account unblocked.")
             } catch (e: ApiError) {
                 relationship = previous
-                showNotice("Could not unmute: the server returned error ${e.status}. Your previous state was restored; try again.")
+                val action = if (blocking) "block" else "unblock"
+                showNotice("Could not $action this account: the server returned error ${e.status}. Your previous relationship was kept; try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 relationship = previous
-                showNotice("Could not unmute: ${e.message ?: "network error"}. Your previous state was restored; try again.")
+                val action = if (blocking) "block" else "unblock"
+                showNotice("Could not $action this account: ${e.message ?: "network error"}. Your previous relationship was kept; try again.")
             } finally {
                 relBusy = false
             }
@@ -399,6 +463,9 @@ fun ProfileScreen(
                                 }
                             },
                             onNoteClick = if (isSelf) null else ({ noteDialogOpen = true }),
+                            onBlockClick = if (isSelf) null else ({
+                                if (relationship?.blocking == true) toggleBlock() else confirmBlock = true
+                            }),
                             onOpenAccountList = onOpenAccountList,
                         )
                     }
@@ -449,6 +516,14 @@ fun ProfileScreen(
                         }
 
                         else -> items(count = list.items.size, key = { list.items[it].id }) { index ->
+                            if (list.items[index].id in list.pinnedIds) {
+                                Text(
+                                    text = "Pinned post",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
                             StatusCard(
                                 status = list.items[index],
                                 api = api,
@@ -493,6 +568,26 @@ fun ProfileScreen(
             },
             dismissButton = {
                 TextButton(onClick = { confirmFollow = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (confirmBlock && followTarget != null) {
+        AlertDialog(
+            onDismissRequest = { confirmBlock = false },
+            title = { Text("Block @${followTarget.acct}?") },
+            text = { Text("This account will not be able to follow you or interact with your posts. You will also unfollow each other.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmBlock = false
+                        toggleBlock()
+                    },
+                    modifier = Modifier.semantics { contentDescription = "Confirm blocking this account" },
+                ) { Text("Block") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBlock = false }) { Text("Cancel") }
             },
         )
     }
@@ -626,6 +721,7 @@ private fun ProfileHeader(
     onToggleFollow: () -> Unit,
     onMuteClick: (() -> Unit)? = null,
     onNoteClick: (() -> Unit)? = null,
+    onBlockClick: (() -> Unit)? = null,
     onOpenAccountList: ((String) -> Unit)? = null,
 ) {
     val actions = LocalAppActions.current
@@ -668,7 +764,7 @@ private fun ProfileHeader(
             if (onMuteClick != null) {
                 TextButton(
                     onClick = onMuteClick,
-                    enabled = !relBusy,
+                    enabled = !relBusy && !relationship.blocking,
                     modifier = Modifier
                         .heightIn(min = 48.dp)
                         .semantics {
@@ -688,6 +784,23 @@ private fun ProfileHeader(
                     ) {
                         Text(if (relationship.note.isBlank()) "Add note" else "Edit note")
                     }
+                }
+            }
+            if (onBlockClick != null) {
+                TextButton(
+                    onClick = onBlockClick,
+                    enabled = !relBusy,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .semantics {
+                            contentDescription = if (relationship.blocking) {
+                                "Unblock this account"
+                            } else {
+                                "Block this account"
+                            }
+                        },
+                ) {
+                    Text(if (relationship.blocking) "Unblock" else "Block")
                 }
             }
         } else if (!isSelf && relError) {
@@ -796,7 +909,7 @@ private fun RelationshipButton(
     if (relationship.requested) {
         OutlinedButton(
             onClick = onToggleFollow,
-            enabled = !busy,
+            enabled = !busy && !relationship.blocking,
             modifier = Modifier
                 .heightIn(min = 48.dp)
                 .semantics { contentDescription = description },
@@ -806,7 +919,7 @@ private fun RelationshipButton(
     } else {
         Button(
             onClick = onToggleFollow,
-            enabled = !busy,
+            enabled = !busy && !relationship.blocking,
             modifier = Modifier
                 .heightIn(min = 48.dp)
                 .semantics { contentDescription = description },

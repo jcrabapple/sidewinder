@@ -948,7 +948,10 @@ private fun CountsRow(
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.semantics(mergeDescendants = true) {},
+        ) {
             IconButton(
                 onClick = { onReply(status.id) },
                 interactionSource = replySource,
@@ -967,16 +970,14 @@ private fun CountsRow(
                 Text(
                     text = formatCount(status.replies_count),
                     style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.clearAndSetSemantics {},
                 )
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!hideCounts) {
-                Text(
-                    text = formatCount(status.reblogs_count),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.semantics(mergeDescendants = true) {},
+        ) {
             // One target for tap + long-press (IconButton has no
             // onLongClick): Box carries both, 48dp preserved. The same
             // interaction source feeds the press animation. Long-press
@@ -1032,14 +1033,18 @@ private fun CountsRow(
                     )
                 }
             }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!hideCounts) {
+            if (!hideCounts && status.reblogs_count > 0) {
                 Text(
-                    text = formatCount(status.favourites_count),
+                    text = formatCount(status.reblogs_count),
                     style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.clearAndSetSemantics {},
                 )
             }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.semantics(mergeDescendants = true) {},
+        ) {
             IconButton(
                 onClick = { toggle("favourite", "favourite", status.favourited) },
                 enabled = pending == null,
@@ -1058,6 +1063,13 @@ private fun CountsRow(
                     contentDescription = null,
                     tint = if (status.favourited) LocalActionColors.current.favourite else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.bouncing(favouriteSource).pulseOn(status.favourited),
+                )
+            }
+            if (!hideCounts && status.favourites_count > 0) {
+                Text(
+                    text = formatCount(status.favourites_count),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.clearAndSetSemantics {},
                 )
             }
         }
@@ -1145,6 +1157,14 @@ private fun StatusMenu(status: Status, onNotice: (String) -> Unit) {
                 },
             )
             if (actions != null) {
+                DropdownMenuItem(
+                    text = { Text("Quote") },
+                    leadingIcon = { Icon(Icons.Filled.FormatQuote, contentDescription = null) },
+                    onClick = {
+                        open = false
+                        actions.openQuote(status.id)
+                    },
+                )
                 DropdownMenuItem(
                     text = { Text("Open @${status.account.acct}") },
                     leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null) },

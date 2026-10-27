@@ -49,4 +49,15 @@ class OauthClientCheckTest {
         assertTrue(pendingLoginExpired(savedAtMs = 1_000L, nowMs = 1_000L + 31 * 60_000L))
         assertTrue(pendingLoginExpired(savedAtMs = 0L, nowMs = 1_000L))
     }
+
+    @Test
+    fun grantedTokenScopeIsPreferred() {
+        assertEquals("read write", effectiveTokenScopes("read write", ADMIN_SCOPES))
+    }
+
+    @Test
+    fun blankGrantedTokenScopeFallsBackToRequestedScope() {
+        assertEquals(ADMIN_SCOPES, effectiveTokenScopes("", ADMIN_SCOPES))
+        assertEquals(SCOPES, effectiveTokenScopes("   ", SCOPES))
+    }
 }

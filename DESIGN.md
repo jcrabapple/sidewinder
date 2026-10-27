@@ -36,9 +36,8 @@ No emoji or unicode glyphs as icons.
 
 ## Layout
 
-- Desktop ≥1180px: nav rail (icons+labels, 220px) · main column (600px max) ·
-  detail pane for threads/profiles.
-- ≥920px: nav rail, single main column.
+- Desktop ≥920px: nav rail (icons+labels, 230px) · single main column
+  (680px max). Threads and profiles use that column; no detail pane is built.
 - Below: bottom tab bar (44px+ targets), safe-area padding.
 - Compose is a modal `<dialog>` (protected focus); quick actions are inline.
 

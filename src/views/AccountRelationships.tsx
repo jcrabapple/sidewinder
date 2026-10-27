@@ -44,6 +44,7 @@ export function AccountRelationshipsView({ id, kind }: AccountRelationshipsProps
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
+    setLoadingMore(false)
     setItems([])
     setNextMaxId(null)
     try {
@@ -72,11 +73,15 @@ export function AccountRelationshipsView({ id, kind }: AccountRelationshipsProps
 
   async function loadMore() {
     if (!nextMaxId || loadingMore) return
+    const seq = ++requestSeq.current
+    const cursor = nextMaxId
     setLoadingMore(true)
+    setError(null)
     try {
       const page = await api.value.page<Account>(`/api/v1/accounts/${encodeURIComponent(id)}/${kind}`, {
-        query: { limit: PAGE_SIZE, max_id: nextMaxId },
+        query: { limit: PAGE_SIZE, max_id: cursor },
       })
+      if (seq !== requestSeq.current) return
       setItems((cur) => {
         const seen = new Set(cur.map((a) => a.id))
         return [...cur, ...page.items.filter((a) => !seen.has(a.id))]
@@ -86,9 +91,10 @@ export function AccountRelationshipsView({ id, kind }: AccountRelationshipsProps
         void ensureRelationships(page.items.map((a) => a.id))
       }
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Could not load more accounts.')
     } finally {
-      setLoadingMore(false)
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 
@@ -161,6 +167,7 @@ export function AccountRelationshipsView({ id, kind }: AccountRelationshipsProps
           {items.map((acct) => (
             <AccountCard key={acct.id} account={acct} isMe={acct.id === me} />
           ))}
+          {error && <p class="error-note" role="alert">{error}</p>}
           {nextMaxId && (
             <button
               class="btn account-rel__more"

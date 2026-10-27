@@ -2,7 +2,7 @@
 
 ## Server facts (verified 2026-10-16)
 
-- gts.example.org runs GoToSocial `0.22.2+git-fb2bf13`. The upstream GTS API spec
+- GoToSocial `0.22.2+git-fb2bf13`: the upstream GTS API spec
   (docs.gotosocial.org latest swagger) contains NO quote support: no `quoted_status_id`
   form field, no `quote` field on Status, no quote approval endpoints. Native
   (Mastodon 4.5 / FEP-044f) quote posts cannot be created through this server.

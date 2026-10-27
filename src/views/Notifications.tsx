@@ -11,6 +11,7 @@ import { api, activeSession } from '../state/auth'
 import { hasAdminScope, approveSignup, denySignup } from '../state/admin'
 import { onNotification } from '../state/streaming'
 import { refreshFollowRequestCount, markNotificationsRead, followRequestCount } from '../state/notifications'
+import { filterSignupNotifications } from '../state/signupNotifications'
 import { FollowRequestsList } from './FollowRequests'
 import { syncMarkersFromServer } from '../state/markers'
 import { StatusCard, replaceEmojis } from '../components/StatusCard'
@@ -154,25 +155,44 @@ export function NotificationsView() {
   // Push deep-link: tapping a notification lands here with ?n=<notification
   // id>. Resolve it to the post thread (status-bearing types) or highlight
   // the row; if it's older than the first page, page deeper to find it.
-  const jumpId = useRef<string | null>(route.value.query.get('n'))
+  const deepLinkId = route.value.query.get('n')
+  const jumpId = useRef<string | null>(deepLinkId)
   const [highlightId, setHighlightId] = useState<string | null>(null)
 
-  async function resolveJump(list: Notification[], moreId: string | null, depth = 0): Promise<void> {
+  async function resolveJump(
+    list: Notification[],
+    moreId: string | null,
+    depth = 0,
+    seq = requestSeq.current,
+    f = filter,
+    sessionId = activeSession.value?.id ?? '',
+  ): Promise<void> {
     const id = jumpId.current
-    if (!id) return
+    if (!id || seq !== requestSeq.current || f !== filter || (activeSession.value?.id ?? '') !== sessionId) return
     const found = list.find((x) => x.id === id)
     if (!found) {
       if (moreId && depth < 2) {
-        const page = await api.value.page<Notification>(endpoint('all', moreId))
-        setItems((cur) => {
-          const seen = new Set(cur.map((x) => x.id))
-          return [...cur, ...page.items.filter((x) => !seen.has(x.id))]
-        })
-        setNextMaxId(page.nextMaxId)
-        await resolveJump([...list, ...page.items], page.nextMaxId, depth + 1)
+        try {
+          const client = api.value
+          const page = await client.page<Notification>(endpoint('all', moreId))
+          if (seq !== requestSeq.current || f !== filter || jumpId.current !== id || (activeSession.value?.id ?? '') !== sessionId) return
+          const filtered = await filterSignupNotifications(page.items)
+          if (!filtered || seq !== requestSeq.current || f !== filter || jumpId.current !== id || (activeSession.value?.id ?? '') !== sessionId) return
+          if (filtered.error) setError(`Some signups could not be checked: ${filtered.error.message}`)
+          setItems((cur) => {
+            const seen = new Set(cur.map((x) => x.id))
+            return [...cur, ...filtered.items.filter((x) => !seen.has(x.id))]
+          })
+          setNextMaxId(page.nextMaxId)
+          await resolveJump([...list, ...filtered.items], page.nextMaxId, depth + 1, seq, f, sessionId)
+        } catch (e) {
+          if (seq === requestSeq.current && f === filter && jumpId.current === id) {
+            setError(e instanceof Error ? e.message : 'The linked notification could not be loaded.')
+          }
+        }
         return
       }
-      jumpId.current = null
+      if (jumpId.current === id) jumpId.current = null
       return
     }
     jumpId.current = null
@@ -187,28 +207,37 @@ export function NotificationsView() {
     })
   }
 
-  async function loadFirst(f: Filter) {
+  async function loadFirst(f: Filter, preservePending = false) {
     const seq = ++requestSeq.current
+    const sessionId = activeSession.value?.id ?? ''
+    const client = api.value
     setState('loading')
     setError(null)
     setItems([])
-    setPending([])
+    if (!preservePending) setPending([])
     setNextMaxId(null)
+    setLoadingMore(false)
     try {
-      const page = await api.value.page<Notification>(endpoint(f))
-      if (seq !== requestSeq.current) return
-      setItems(page.items)
+      const page = await client.page<Notification>(endpoint(f))
+      if (seq !== requestSeq.current || (activeSession.value?.id ?? '') !== sessionId) return
+      const filtered = await filterSignupNotifications(page.items)
+      if (!filtered || seq !== requestSeq.current || (activeSession.value?.id ?? '') !== sessionId) return
+      setItems((cur) => {
+        if (!preservePending) return filtered.items
+        // A streamed row may have been moved out of the pill while this fetch
+        // was in flight. Keep either representation instead of discarding it.
+        const seen = new Set(cur.map((n) => n.id))
+        return [...cur, ...filtered.items.filter((n) => !seen.has(n.id))]
+      })
       setNextMaxId(page.nextMaxId)
+      setError(filtered.error ? `Some signups could not be checked: ${filtered.error.message}` : null)
       setState('ready')
-      void resolveJump(page.items, page.nextMaxId)
-      // Newest loaded notification is read by definition → push the marker.
-      // Push the notifications marker only for the unfiltered view: the
-      // newest item of a filtered view is not "the newest read
-      // notification", and pushing it would misplace the server marker for
-      // every other client.
+      void resolveJump(filtered.items, page.nextMaxId, 0, seq, f, sessionId)
+      // Mark the raw newest row, even when signup suppression hides it. A
+      // filtered newest row would leave a permanent phantom unread badge.
       if (f === 'all' && page.items.length > 0) markNotificationsRead(page.items[0].id)
     } catch (e) {
-      if (seq !== requestSeq.current) return
+      if (seq !== requestSeq.current || (activeSession.value?.id ?? '') !== sessionId) return
       setError(e instanceof Error ? e.message : 'Notifications could not be loaded.')
       setState('error')
     }
@@ -216,18 +245,29 @@ export function NotificationsView() {
 
   async function loadMore() {
     if (!nextMaxId || loadingMore) return
+    const seq = requestSeq.current
+    const f = filter
+    const sessionId = activeSession.value?.id ?? ''
+    const client = api.value
+    const maxId = nextMaxId
     setLoadingMore(true)
     try {
-      const page = await api.value.page<Notification>(endpoint(filter, nextMaxId))
+      const page = await client.page<Notification>(endpoint(f, maxId))
+      if (seq !== requestSeq.current || f !== filter || (activeSession.value?.id ?? '') !== sessionId) return
+      const filtered = await filterSignupNotifications(page.items)
+      if (!filtered || seq !== requestSeq.current || f !== filter || (activeSession.value?.id ?? '') !== sessionId) return
       setItems((cur) => {
         const seen = new Set(cur.map((n) => n.id))
-        return [...cur, ...page.items.filter((n) => !seen.has(n.id))]
+        return [...cur, ...filtered.items.filter((n) => !seen.has(n.id))]
       })
       setNextMaxId(page.nextMaxId)
+      setError(filtered.error ? `Some signups could not be checked: ${filtered.error.message}` : null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'More notifications could not be loaded.')
+      if (seq === requestSeq.current && f === filter) {
+        setError(e instanceof Error ? e.message : 'More notifications could not be loaded.')
+      }
     } finally {
-      setLoadingMore(false)
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 
@@ -237,6 +277,23 @@ export function NotificationsView() {
     void refreshFollowRequestCount()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter])
+
+  // A push can replace ?n= without unmounting this view. Switch to All so
+  // older-page resolution never appends unfiltered rows into a filtered tab.
+  useEffect(() => {
+    jumpId.current = deepLinkId
+    setHighlightId(null)
+    if (!deepLinkId) return
+    if (filter !== 'all') {
+      setFilter('all')
+      return
+    }
+    if (state === 'ready') {
+      void resolveJump(items, nextMaxId, 0, requestSeq.current, filter, activeSession.value?.id ?? '')
+    }
+    // loadFirst owns the initial/loading case; this effect handles new ids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkId])
 
   // Deep link: #/notifications?tab=requests (linked from the notification card).
   const tabParam = route.value.query.get('tab')
@@ -344,7 +401,7 @@ export function NotificationsView() {
             class="icon-btn"
             aria-label="Refresh notifications"
             title="Refresh notifications"
-            onClick={() => void loadFirst(filter)}
+            onClick={() => void loadFirst(filter, true)}
           >
             <Icon name="refresh" size={18} />
           </button>
@@ -371,7 +428,7 @@ export function NotificationsView() {
         <div class="state-block" role="alert">
           <h2>Notifications unavailable</h2>
           <p>{error ?? 'Notifications could not be loaded.'}</p>
-          <button class="btn" onClick={() => void loadFirst(filter)}>
+          <button class="btn" onClick={() => void loadFirst(filter, true)}>
             Try again
           </button>
         </div>
@@ -535,7 +592,7 @@ function NotificationRow({
     setSignupBusy(decision)
     try {
       if (decision === 'approve') {
-        await approveSignup({
+        const result = await approveSignup({
           id: account.id,
           username: account.username,
           domain: account.domain ?? null,
@@ -551,12 +608,16 @@ function NotificationRow({
             avatar_static: account.avatar_static,
           },
         })
-        toast(`@${account.acct} approved — they can sign in now`)
+        // Both outcomes mean approval happened. Remove Deny immediately; an
+        // unconfirmed result still surfaces the exact CLI recovery warning.
+        onHandled?.(n.id)
+        if (result.status === 'approved_unconfirmed') toast(result.warning, 'error')
+        else toast(`@${account.acct} approved — they can sign in now`)
       } else {
         await denySignup(account.id)
         toast(`@${account.acct}'s signup denied`)
+        onHandled?.(n.id)
       }
-      onHandled?.(n.id)
     } catch (e) {
       toast(e instanceof Error ? e.message : `Could not ${decision} the signup.`, 'error')
     } finally {

@@ -150,7 +150,16 @@ private fun QuoteCard(
             overflow = TextOverflow.Ellipsis,
         )
         if (showMediaPreviews) {
-            quoted.media_attachments.firstOrNull { it.type == "image" }?.let { image ->
+            val image = quoted.media_attachments.firstOrNull { it.type == "image" }
+            if (quoted.sensitive && image != null) {
+                // Do not even create an image request for sensitive quoted
+                // media. The containing card still opens the original post.
+                Text(
+                    text = "Sensitive quoted media is hidden. Open the quoted post to view it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (image != null) {
                 val preview = image.preview_url ?: image.url
                 if (preview != null) {
                     AsyncImage(

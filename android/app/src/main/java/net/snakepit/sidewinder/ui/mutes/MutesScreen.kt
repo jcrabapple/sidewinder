@@ -62,6 +62,7 @@ private sealed interface MutesState {
         val items: List<Account>,
         val nextMaxId: String?,
         val loadingMore: Boolean,
+        val loadMoreFailed: Boolean = false,
     ) : MutesState
 }
 
@@ -85,6 +86,7 @@ fun MutesScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    var failedPagePosition by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     suspend fun loadFirstPage() {
         state = MutesState.Loading
@@ -109,7 +111,7 @@ fun MutesScreen(
         val maxId = current.nextMaxId ?: return // end reached
         if (current.loadingMore) return
 
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreFailed = false)
         scope.launch {
             try {
                 val page = MuteRepository.mutes(api, session.token, maxId)
@@ -117,17 +119,24 @@ fun MutesScreen(
                 val baseIds = base.mapTo(HashSet()) { it.id }
                 val fresh = page.items.filterNot { it.id in baseIds }
                 state = MutesState.Content(base + fresh, page.nextMaxId, loadingMore = false)
+                failedPagePosition = null
             } catch (e: ApiError) {
-                (state as? MutesState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? MutesState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
                 scope.launch {
-                    snackbarHostState.showSnackbar("Could not load older muted accounts: the server returned error ${e.status}. Scroll to try again.")
+                    snackbarHostState.showSnackbar("Could not load older muted accounts: the server returned error ${e.status}. Scroll or tap Retry to try again.")
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                (state as? MutesState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                (state as? MutesState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreFailed = true)
+                }
                 scope.launch {
-                    snackbarHostState.showSnackbar("Could not load older muted accounts: ${e.message ?: "network error"}. Scroll to try again.")
+                    snackbarHostState.showSnackbar("Could not load older muted accounts: ${e.message ?: "network error"}. Scroll or tap Retry to try again.")
                 }
             }
         }
@@ -189,16 +198,19 @@ fun MutesScreen(
     LaunchedEffect(api, session.id) { loadFirstPage() }
 
     // Infinite scroll: trigger one page ahead of the last visible item.
-    // Both the last visible index and the state are read inside the
-    // snapshotFlow so a fresh page (or end of list) re-evaluates, and
-    // loadNextPage re-checks the guards so this cannot double-fetch.
+    // Only the scroll position and the paging flags drive re-evaluation, so
+    // unrelated list edits cannot relaunch a failed page. After a failure a
+    // real scroll (position change) or the inline Retry is required.
     LaunchedEffect(listState) {
         snapshotFlow {
+            val position = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? MutesState.Content ?: return@collect
+            val paging = (state as? MutesState.Content)?.let { it.loadingMore to it.loadMoreFailed }
+            Triple(position, lastVisible, paging)
+        }.collect { (position, lastVisible, _) ->
+            val current = state as? MutesState.Content ?: return@collect
             if (current.nextMaxId == null || current.loadingMore) return@collect
+            if (current.loadMoreFailed && position == failedPagePosition) return@collect
             if (lastVisible >= current.items.size - 3) loadNextPage()
         }
     }
@@ -250,6 +262,27 @@ fun MutesScreen(
                             CircularProgressIndicator(
                                 modifier = Modifier.semantics { contentDescription = "Loading older muted accounts" },
                             )
+                        }
+                    }
+                } else if (s.loadMoreFailed) {
+                    item(key = "load-more-error") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = "Could not load older muted accounts.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(
+                                onClick = { loadNextPage() },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .semantics { contentDescription = "Retry loading older muted accounts" },
+                            ) {
+                                Text("Retry")
+                            }
                         }
                     }
                 }

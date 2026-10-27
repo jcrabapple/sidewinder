@@ -1,5 +1,6 @@
 /** App settings: theme, media defaults, misc preferences. Persisted to localStorage. */
 import { signal } from '@preact/signals'
+import { toast } from './toast'
 
 export type ThemePref = 'system' | 'dark' | 'light'
 
@@ -60,7 +61,13 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 })
 
 export function updateSettings(patch: Partial<Settings>) {
-  settings.value = { ...settings.value, ...patch }
-  applyTheme(settings.value.theme)
-  localStorage.setItem(KEY, JSON.stringify(settings.value))
+  const next = { ...settings.value, ...patch }
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next))
+  } catch {
+    toast('Could not save settings. Allow browser storage or free up space, then try again.', 'error')
+    return
+  }
+  settings.value = next
+  applyTheme(next.theme)
 }

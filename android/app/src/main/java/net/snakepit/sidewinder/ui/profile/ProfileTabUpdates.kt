@@ -10,6 +10,19 @@ import net.snakepit.sidewinder.core.model.Status
  */
 internal object ProfileTabUpdates {
 
+    /** Pinned posts first, then ordinary posts, with each status id appearing once. */
+    fun mergedPosts(pinned: List<Status>, posts: List<Status>): List<Status> {
+        val merged = ArrayList<Status>(pinned.size + posts.size)
+        val ids = HashSet<String>(pinned.size + posts.size)
+        for (status in pinned) {
+            if (ids.add(status.id)) merged += status
+        }
+        for (status in posts) {
+            if (ids.add(status.id)) merged += status
+        }
+        return merged
+    }
+
     /**
      * [items] with [updated] applied: rows whose id matches are replaced,
      * and boost wrappers whose inner status matches get the updated inner

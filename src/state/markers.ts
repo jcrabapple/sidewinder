@@ -11,7 +11,7 @@
  */
 import { api, activeSession } from './auth'
 import { getSeenTop, setSeenTop, isValidStatusId } from './readState'
-import type { Api } from '../api/client'
+import { Api } from '../api/client'
 
 export type MarkerTimeline = 'home' | 'notifications'
 
@@ -22,10 +22,11 @@ interface Marker {
 }
 
 type MarkersResponse = Partial<Record<MarkerTimeline, Marker>>
+type MarkerBody = Partial<Record<MarkerTimeline, { last_read_id: string }>>
 
 /** readState timeline key for a server marker timeline. Home matches the
- *  TimelinePage key ('home::'); notifications has no local pill yet but the
- *  mark is stored so adoption stays symmetric. */
+ * TimelinePage key ('home::'); notifications has no local pill yet but the
+ * mark is stored so adoption stays symmetric. */
 function localKey(t: MarkerTimeline): string {
   return t === 'home' ? 'home::' : 'notifications'
 }
@@ -34,11 +35,10 @@ function sessionId(): string {
   return activeSession.value?.id ?? ''
 }
 
-/** Adopt any server marker newer than the local mark. `session` and
- *  `client` are captured by the caller BEFORE the fetch: if the user
- *  switches accounts mid-flight, markers fetched for the old account must
- *  never be written into the new account's read state. */
-function adopt(session: string, client: Api, t: MarkerTimeline, marker: Marker | undefined): void {
+/** Adopt any server marker newer than the local mark. The session and client
+ * are captured by the caller BEFORE the fetch, so a response for account A
+ * can never be applied or resent as account B. */
+function adopt(session: string, t: MarkerTimeline, marker: Marker | undefined): void {
   if (!marker || !isValidStatusId(marker.last_read_id)) return
   if (marker.last_read_id > getSeenTop(session, localKey(t))) {
     setSeenTop(session, localKey(t), marker.last_read_id)
@@ -51,7 +51,7 @@ function fetchMarkersWith(client: Api): Promise<MarkersResponse> {
   })
 }
 
-// One in-flight sync per session — App bootstrap and view mounts both call
+// One in-flight sync per session: App bootstrap and view mounts both call
 // this; the guard collapses duplicates without blocking later sessions.
 let syncPromise: Promise<void> | null = null
 let syncedSession = ''
@@ -62,63 +62,131 @@ export function syncMarkersFromServer(): Promise<void> {
   if (syncPromise && syncedSession === session) return syncPromise
   syncedSession = session
   syncPromise = (async () => {
-    // Capture BOTH the session and its api client up front: a session
-    // switch mid-fetch must not write account A's markers into account B.
     const client = api.value
     try {
       const markers = await fetchMarkersWith(client)
-      adopt(session, client, 'home', markers.home)
-      adopt(session, client, 'notifications', markers.notifications)
+      adopt(session, 'home', markers.home)
+      adopt(session, 'notifications', markers.notifications)
     } catch (e) {
       console.debug('markers: sync failed', e)
     } finally {
-      // Allow later callers to re-sync (retry after a transient failure)
-      // instead of caching a resolved promise for the app's lifetime.
       if (syncedSession === session) syncPromise = null
     }
   })()
   return syncPromise
 }
 
-// Trailing debounce, 3s per SESSION+timeline; only the highest queued id is
-// sent. Keyed by session so two accounts' pending pushes never collide.
 const DEBOUNCE_MS = 3000
-const pending = new Map<string, { id: string; session: string; timer: ReturnType<typeof setTimeout> }>()
 
-export function queueMarkerPush(timeline: MarkerTimeline, lastReadId: string): void {
-  const session = sessionId()
-  if (!session) return
-  const key = `${session}:${timeline}`
-  const cur = pending.get(key)
-  if (cur && lastReadId <= cur.id) return
-  if (cur) clearTimeout(cur.timer)
-  const timer = setTimeout(() => {
-    pending.delete(key)
-    // The queued id belongs to the session that queued it: if the user
-    // switched accounts during the debounce window, drop it — pushing it
-    // would write account A's marker into account B.
-    if (sessionId() !== session) return
-    void pushMarker(session, timeline, lastReadId)
-  }, DEBOUNCE_MS)
-  pending.set(key, { id: lastReadId, session, timer })
+export interface PendingMarker {
+  id: string
+  session: string
+  base: string
+  token: string
+  timeline: MarkerTimeline
 }
 
-async function pushMarker(session: string, timeline: MarkerTimeline, lastReadId: string): Promise<void> {
-  // Same session-guard as above, at push time.
-  if (sessionId() !== session) return
-  const client = api.value
+interface PendingEntry extends PendingMarker {
+  key: string
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+export interface MarkerFlush {
+  base: string
+  token: string
+  body: MarkerBody
+}
+
+export function pendingMarkerKey(session: string, timeline: MarkerTimeline): string {
+  return JSON.stringify([session, timeline])
+}
+
+/** Select the highest id for each session/timeline and group timelines into
+ * one keepalive request per captured account credential. */
+export function selectMarkerFlushes(values: Iterable<PendingMarker>): MarkerFlush[] {
+  const highest = new Map<string, PendingMarker>()
+  for (const value of values) {
+    const key = pendingMarkerKey(value.session, value.timeline)
+    const current = highest.get(key)
+    if (!current || value.id > current.id) highest.set(key, value)
+  }
+  const grouped = new Map<string, MarkerFlush>()
+  for (const value of highest.values()) {
+    const credentialKey = JSON.stringify([value.session, value.base, value.token])
+    let flush = grouped.get(credentialKey)
+    if (!flush) {
+      flush = { base: value.base, token: value.token, body: {} }
+      grouped.set(credentialKey, flush)
+    }
+    flush.body[value.timeline] = { last_read_id: value.id }
+  }
+  return [...grouped.values()]
+}
+
+// Pending entries remain selectable until their normal POST finishes, so a
+// pagehide immediately after the debounce can still flush them with keepalive.
+const pending = new Map<string, PendingEntry>()
+
+export function queueMarkerPush(timeline: MarkerTimeline, lastReadId: string): void {
+  const active = activeSession.value
+  if (!active) return
+  const session = active.id
+  const key = pendingMarkerKey(session, timeline)
+  const current = pending.get(key)
+  if (current && lastReadId <= current.id) return
+  clearTimeout(current?.timer ?? undefined)
+  const entry: PendingEntry = {
+    id: lastReadId,
+    session,
+    base: active.base,
+    token: active.token,
+    timeline,
+    key,
+    timer: null,
+  }
+  entry.timer = setTimeout(() => {
+    void pushMarker(entry).finally(() => {
+      if (pending.get(key) === entry) pending.delete(key)
+    })
+  }, DEBOUNCE_MS)
+  pending.set(key, entry)
+}
+
+async function pushMarker(entry: PendingEntry): Promise<void> {
+  const client = new Api(entry.base)
+  client.token = entry.token
   try {
     await client.post<MarkersResponse>('/api/v1/markers', {
-      [timeline]: { last_read_id: lastReadId },
+      [entry.timeline]: { last_read_id: entry.id },
     })
   } catch (e) {
-    // 409 = concurrent writer raced us; re-fetch to reconcile and move on.
     console.debug('markers: push failed', e)
     try {
       const markers = await fetchMarkersWith(client)
-      adopt(session, client, timeline, markers[timeline])
+      adopt(entry.session, entry.timeline, markers[entry.timeline])
     } catch (e2) {
       console.debug('markers: reconcile failed', e2)
     }
   }
 }
+
+/** The page may freeze before a normal fetch finishes. keepalive preserves
+ * the highest queued markers using the account captured when they were read. */
+function flushPendingMarkers(): void {
+  const flushes = selectMarkerFlushes(pending.values())
+  for (const entry of pending.values()) clearTimeout(entry.timer ?? undefined)
+  pending.clear()
+  for (const flush of flushes) {
+    void fetch(`${flush.base.replace(/\/+$/, '')}/api/v1/markers`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${flush.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(flush.body),
+      keepalive: true,
+    }).catch((e) => console.debug('markers: pagehide flush failed', e))
+  }
+}
+
+if (typeof window !== 'undefined') window.addEventListener('pagehide', flushPendingMarkers)

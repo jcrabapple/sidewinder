@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,18 +16,27 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -64,12 +74,10 @@ internal fun AppearanceSection(
     onPureBlack: (Boolean) -> Unit,
     onTextScale: (Float) -> Unit,
 ) {
+    val dynamicColorsActive = settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Text(
-            text = "Appearance",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(vertical = 8.dp),
-        )
+        SettingsSectionHeader("Appearance")
 
         Text(
             text = "Mode",
@@ -92,9 +100,9 @@ internal fun AppearanceSection(
             }
         }
 
-        ThemeGrid(
+        ThemePicker(
             selectedId = settings.themeId,
-            enabled = !settings.dynamicColor,
+            enabled = !dynamicColorsActive,
             onSelect = onThemeId,
         )
 
@@ -113,15 +121,18 @@ internal fun AppearanceSection(
 
         ToggleRow(
             title = "Pure black",
-            subtitle = if (settings.theme == ThemePref.LIGHT) {
-                "Black backgrounds in dark mode. Switch the mode to System or Dark to use it."
-            } else {
-                "Black backgrounds in dark mode. Saves battery on OLED screens."
+            subtitle = when {
+                dynamicColorsActive ->
+                    "Dynamic colors are on, so pure black cannot change the background. " +
+                        "Turn them off to use pure black."
+                settings.theme == ThemePref.LIGHT ->
+                    "Black backgrounds in dark mode. Switch the mode to System or Dark to use it."
+                else -> "Black backgrounds in dark mode. Saves battery on OLED screens."
             },
             checked = settings.pureBlack,
             label = "Pure black toggle",
             onCheckedChange = onPureBlack,
-            enabled = settings.theme != ThemePref.LIGHT,
+            enabled = !dynamicColorsActive && settings.theme != ThemePref.LIGHT,
         )
 
         DropdownSettingRow(
@@ -134,39 +145,65 @@ internal fun AppearanceSection(
     }
 }
 
-/** Theme cards in rows of two (a grid would not scroll inside this list). */
+/** Compact current-theme preview with a scrollable, immediately applied chooser. */
 @Composable
-private fun ThemeGrid(
+private fun ThemePicker(
     selectedId: String,
     enabled: Boolean,
     onSelect: (String) -> Unit,
 ) {
+    var showChooser by rememberSaveable { mutableStateOf(false) }
+    val selectedTheme = AppThemes.byId(selectedId)
+    val shape = RoundedCornerShape(10.dp)
+
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(
             text = "Theme",
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(bottom = 4.dp),
         )
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .alpha(if (enabled) 1f else 0.5f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .heightIn(min = 48.dp)
+                .alpha(if (enabled) 1f else 0.5f)
+                .clickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = { showChooser = true },
+                )
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+                .padding(12.dp)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = "Choose theme, currently ${selectedTheme.name}"
+                },
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            AppThemes.all.chunked(2).forEach { rowThemes ->
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = selectedTheme.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    rowThemes.forEach { theme ->
-                        ThemeCard(
-                            theme = theme,
-                            selected = theme.id == selectedId,
-                            enabled = enabled,
-                            onSelect = { onSelect(theme.id) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    if (rowThemes.size == 1) Spacer(modifier = Modifier.weight(1f))
+                    VariantPanel(
+                        palette = selectedTheme.light,
+                        dark = false,
+                        modifier = Modifier.weight(1f),
+                    )
+                    VariantPanel(
+                        palette = selectedTheme.dark,
+                        dark = true,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 12.dp),
+            )
         }
         if (!enabled) {
             Text(
@@ -177,6 +214,34 @@ private fun ThemeGrid(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
+    }
+
+    if (showChooser) {
+        AlertDialog(
+            onDismissRequest = { showChooser = false },
+            title = { Text("Choose theme") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(AppThemes.all, key = { it.id }) { theme ->
+                        ThemeCard(
+                            theme = theme,
+                            selected = theme.id == selectedId,
+                            enabled = true,
+                            onSelect = { onSelect(theme.id) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showChooser = false }) {
+                    Text("Done")
+                }
+            },
+        )
     }
 }
 

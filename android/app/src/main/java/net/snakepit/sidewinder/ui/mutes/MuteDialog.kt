@@ -8,12 +8,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -50,7 +51,7 @@ private val DURATIONS = listOf(
 
 /**
  * Mute confirmation dialog for [account]. Duration chips (1 hour through
- * 180 days, plus indefinite), a "Also mute notifications" checkbox that
+ * 180 days, plus indefinite), a "Also mute notifications" switch that
  * defaults to on, and Confirm/Cancel buttons. Confirm shows progress on
  * the button only; on success the dialog closes with a notice, and on
  * failure an inline error names the problem so the user can retry.
@@ -121,16 +122,21 @@ fun MuteDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .selectable(
-                            selected = alsoNotifications,
-                            role = Role.Checkbox,
-                            onClick = { alsoNotifications = !alsoNotifications },
+                        .toggleable(
+                            value = alsoNotifications,
+                            role = Role.Switch,
+                            onValueChange = { alsoNotifications = it },
                         )
                         .semantics { contentDescription = "Also mute notifications from this account" },
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Checkbox(checked = alsoNotifications, onCheckedChange = null)
                     Text("Also mute notifications", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = alsoNotifications,
+                        onCheckedChange = null,
+                        modifier = Modifier.clearAndSetSemantics {},
+                    )
                 }
                 errorText?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

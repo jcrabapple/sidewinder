@@ -12,6 +12,7 @@ import { StatusCard, replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { sanitize } from '../util/sanitize'
 import { formatCount, formatAbsolute } from '../util/time'
+import { statusRowMatches } from '../util/statusRows'
 import { useTitle, navigate } from '../router'
 import './Thread.css'
 
@@ -80,9 +81,9 @@ export function ThreadView({ id }: { id: string }) {
   }
 
   function onStatusDeleted(deletedId: string) {
-    setAncestors((cur) => cur.filter((it) => it.id !== deletedId))
-    setDescendants((cur) => cur.filter((it) => it.id !== deletedId))
-    if (status?.id === deletedId) navigate('/', { replace: true })
+    setAncestors((cur) => cur.filter((it) => !statusRowMatches(it, deletedId)))
+    setDescendants((cur) => cur.filter((it) => !statusRowMatches(it, deletedId)))
+    if (status && statusRowMatches(status, deletedId)) navigate('/', { replace: true })
   }
 
   // A reply posted from the composer appears immediately: when the new

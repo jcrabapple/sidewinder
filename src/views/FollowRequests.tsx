@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Account } from '../api/types'
 import { api } from '../state/auth'
 import { toast } from '../state/toast'
-import { followRequestCount, refreshFollowRequestCount, decrementFollowRequestCount } from '../state/notifications'
+import { refreshFollowRequestCount, decrementFollowRequestCount } from '../state/notifications'
 import { onNotification } from '../state/streaming'
 import { replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
@@ -46,6 +46,7 @@ export function FollowRequestsList() {
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
+    setLoadingMore(false)
     setItems([])
     setNextMaxId(null)
     try {
@@ -56,7 +57,7 @@ export function FollowRequestsList() {
       setItems(page.items)
       setNextMaxId(page.nextMaxId)
       setState('ready')
-      followRequestCount.value = page.items.length
+      void refreshFollowRequestCount()
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Follow requests could not be loaded.')
@@ -66,20 +67,25 @@ export function FollowRequestsList() {
 
   async function loadMore() {
     if (!nextMaxId || loadingMore) return
+    const seq = ++requestSeq.current
+    const cursor = nextMaxId
     setLoadingMore(true)
+    setError(null)
     try {
       const page = await api.value.page<Account>('/api/v1/follow_requests', {
-        query: { limit: PAGE_SIZE, max_id: nextMaxId },
+        query: { limit: PAGE_SIZE, max_id: cursor },
       })
+      if (seq !== requestSeq.current) return
       setItems((cur) => {
         const seen = new Set(cur.map((a) => a.id))
         return [...cur, ...page.items.filter((a) => !seen.has(a.id))]
       })
       setNextMaxId(page.nextMaxId)
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'More requests could not be loaded.')
     } finally {
-      setLoadingMore(false)
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 

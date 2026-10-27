@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -115,6 +116,7 @@ fun TimelineScreen(
     // returning from a post (or another tab) resumes exactly where you were.
     val holder = remember(session.id, resolved) { TimelineStore.holder(session.id, resolved) }
     var state by holder::state
+    var pendingNewPosts by holder::pendingNewPosts
     var isRefreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,6 +125,23 @@ fun TimelineScreen(
         onDispose {
             holder.firstVisibleIndex = listState.firstVisibleItemIndex
             holder.firstVisibleOffset = listState.firstVisibleItemScrollOffset
+        }
+    }
+    // Streaming runs outside composition, so keep its reader-position input
+    // current rather than only saving it when this screen leaves composition.
+    LaunchedEffect(holder, listState) {
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                holder.pendingNewPosts,
+            )
+        }.collect { (index, offset, pending) ->
+            holder.firstVisibleIndex = index
+            holder.firstVisibleOffset = offset
+            if (index == 0 && offset == 0 && pending != 0) {
+                holder.pendingNewPosts = 0
+            }
         }
     }
     val showJump by remember { derivedStateOf { listState.firstVisibleItemIndex > JUMP_THRESHOLD } }
@@ -139,6 +158,8 @@ fun TimelineScreen(
     // the flow does not re-emit and a failure cannot retry forever.
     var renderedCount by remember { mutableStateOf(0) }
     var rawCount by remember { mutableStateOf(0) }
+    // Reveal only this holder's loaded rows; never mutate the global settings.
+    var showHiddenPosts by remember(holder) { mutableStateOf(false) }
 
     suspend fun fetchFirstPage(): TimelineState {
         val page = TimelineRepository.fetch(api, resolved)
@@ -172,12 +193,12 @@ fun TimelineScreen(
 
     // One load-more at a time; guarded again inside loadNextPage so a
     // second trigger cannot double-fetch the same page.
-    fun loadNextPage() {
+    fun loadNextPage(retryAfterFailure: Boolean = false) {
         val current = state as? TimelineState.Content ?: return
         val maxId = current.nextMaxId ?: return // end reached
-        if (current.loadingMore) return
+        if (current.loadingMore || (current.loadMoreError != null && !retryAfterFailure)) return
 
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreError = null)
         scope.launch {
             try {
                 val page = TimelineRepository.fetch(api, resolved, maxId)
@@ -187,13 +208,17 @@ fun TimelineScreen(
                 val fresh = page.items.filterNot { it.id in baseIds }
                 state = TimelineState.Content(base + fresh, page.nextMaxId, loadingMore = false)
             } catch (e: ApiError) {
-                (state as? TimelineState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                showNotice("Could not load older posts: the server returned error ${e.status}. Scroll to try again.")
+                val message = "Could not load older posts: the server returned error ${e.status}."
+                (state as? TimelineState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreError = message)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                (state as? TimelineState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                showNotice("Could not load older posts: ${e.message ?: "network error"}. Scroll to try again.")
+                val message = "Could not load older posts: ${e.message ?: "network error"}. Check your connection."
+                (state as? TimelineState.Content)?.let { latest ->
+                    state = latest.copy(loadingMore = false, loadMoreError = message)
+                }
             }
         }
     }
@@ -204,6 +229,7 @@ fun TimelineScreen(
     // explains the error and recovery. Works from Empty too, so a new
     // account's empty feed can be pulled once posts arrive.
     fun refresh() {
+        pendingNewPosts = 0
         val current = state
         if (current is TimelineState.Error) {
             scope.launch { loadFirstPage() }
@@ -283,24 +309,21 @@ fun TimelineScreen(
         }
     }
 
-    // Infinite scroll: the flow is driven by the scroll position and the
-    // rendered/raw row counts only — never by the store state. Reading
-    // `state` here would re-emit when a failed load-more resets
-    // `loadingMore`, retrying the same request forever. The threshold is
-    // compared against the RENDERED (filtered) count, and a feed whose
-    // rows are nearly all hidden keeps paging so filters cannot dead-end
-    // it. `state` is read inside collect, and loadNextPage re-checks its
-    // guards so this cannot double-fetch.
+    // Infinite scroll is driven by scroll position and row counts, not by
+    // state changes from a failed request. A failed page stays failed until
+    // its inline Retry is pressed. A fully filtered feed also stops here:
+    // its explicit reveal action is preferable to unseen, endless paging.
     LaunchedEffect(listState) {
         snapshotFlow {
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             Triple(lastVisible, renderedCount, rawCount)
         }.collect { (lastVisible, rendered, raw) ->
             val current = state as? TimelineState.Content ?: return@collect
-            if (current.nextMaxId == null || current.loadingMore) return@collect
-            // Fewer than 3 rendered rows while more pages exist: the loaded
-            // set is filtered away, so scroll position alone can never reach
-            // the threshold — keep paging forward instead.
+            if (rendered == 0 || current.nextMaxId == null || current.loadingMore || current.loadMoreError != null) {
+                return@collect
+            }
+            // If only a few visible rows remain, paging can still discover
+            // posts that pass the display filters.
             val nearEnd = lastVisible >= rendered - 3
             if (nearEnd || (rendered <= 3 && raw > rendered)) loadNextPage()
         }
@@ -337,7 +360,9 @@ fun TimelineScreen(
                 }
 
                 // A LazyColumn (not a Box) so pull-to-refresh works on an empty feed.
-                TimelineState.Empty -> LazyColumn(Modifier.fillMaxSize()) {
+                TimelineState.Empty -> LazyColumn(
+                    Modifier.widthIn(max = 600.dp).fillMaxSize().align(Alignment.TopCenter),
+                ) {
                     item(key = "empty") {
                         Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                             Text(text = emptyCopy(resolved), style = MaterialTheme.typography.bodyMedium)
@@ -350,14 +375,25 @@ fun TimelineScreen(
                     // boosts, replies, self-boosts, and (wellbeing) alt-less media.
                     // Remembered on its inputs so paging logic can read the
                     // rendered count without re-filtering on every recomposition.
-                    val items = remember(s.items, showBoosts, showReplies, hideSelfBoosts, settings.hideNoAltPosts) {
-                        s.items.filter { st ->
-                            val shown = st.reblog ?: st
-                            if (!showBoosts && st.reblog != null) return@filter false
-                            if (!showReplies && shown.in_reply_to_id != null) return@filter false
-                            if (hideSelfBoosts && st.reblog != null && st.account.id == shown.account.id) return@filter false
-                            if (settings.hideNoAltPosts && shown.media_attachments.any { it.description.isNullOrBlank() }) return@filter false
-                            true
+                    val items = remember(
+                        s.items,
+                        showBoosts,
+                        showReplies,
+                        hideSelfBoosts,
+                        settings.hideNoAltPosts,
+                        showHiddenPosts,
+                    ) {
+                        if (showHiddenPosts) {
+                            s.items
+                        } else {
+                            s.items.filter { st ->
+                                val shown = st.reblog ?: st
+                                if (!showBoosts && st.reblog != null) return@filter false
+                                if (!showReplies && shown.in_reply_to_id != null) return@filter false
+                                if (hideSelfBoosts && st.reblog != null && st.account.id == shown.account.id) return@filter false
+                                if (settings.hideNoAltPosts && shown.media_attachments.any { it.description.isNullOrBlank() }) return@filter false
+                                true
+                            }
                         }
                     }
                     // How many rows the list actually renders (the filtered
@@ -370,10 +406,32 @@ fun TimelineScreen(
                     }
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().align(Alignment.TopCenter),
                         // Room below the last post so the compose FAB never covers it.
                         contentPadding = PaddingValues(bottom = 88.dp),
                     ) {
+                        if (items.isEmpty() && s.items.isNotEmpty()) {
+                            item(key = "display-filters-empty") {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    Text(
+                                        text = "All loaded posts are hidden by your timeline display settings.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Button(
+                                        onClick = { showHiddenPosts = true },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .semantics { contentDescription = "Show hidden posts in this feed" },
+                                    ) {
+                                        Text("Show hidden posts")
+                                    }
+                                }
+                            }
+                        }
                         items(
                             count = items.size,
                             key = { items[it].id },
@@ -400,6 +458,24 @@ fun TimelineScreen(
                                     )
                                 }
                             }
+                        } else if (s.loadMoreError != null) {
+                            item(key = "load-more-error") {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(s.loadMoreError, style = MaterialTheme.typography.bodyMedium)
+                                    Button(
+                                        onClick = { loadNextPage(retryAfterFailure = true) },
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .semantics { contentDescription = "Retry loading older posts" },
+                                    ) {
+                                        Text("Retry")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -407,13 +483,48 @@ fun TimelineScreen(
 
             val reduceMotion = LocalReduceMotion.current
             AnimatedVisibility(
-                visible = showJump && state is TimelineState.Content,
+                visible = state is TimelineState.Content && (pendingNewPosts > 0 || showJump),
                 enter = if (reduceMotion) fadeIn() else fadeIn() + slideInVertically { -it },
                 exit = if (reduceMotion) fadeOut() else fadeOut() + slideOutVertically { -it },
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
             ) {
-                JumpToTopPill(onClick = { scope.launch { listState.jumpToTopSmoothly() } })
+                if (pendingNewPosts > 0) {
+                    NewPostsPill(
+                        count = pendingNewPosts,
+                        onClick = {
+                            pendingNewPosts = 0
+                            scope.launch { listState.jumpToTopSmoothly() }
+                        },
+                    )
+                } else {
+                    JumpToTopPill(onClick = { scope.launch { listState.jumpToTopSmoothly() } })
+                }
             }
+        }
+    }
+}
+
+/** Floating streamed-post indicator; activating it reveals the new rows. */
+@Composable
+internal fun NewPostsPill(count: Int, onClick: () -> Unit) {
+    val label = if (count == 1) "1 new post" else "$count new posts"
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shadowElevation = 4.dp,
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .semantics { contentDescription = "$label. Jump to top" },
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Icon(Icons.Filled.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

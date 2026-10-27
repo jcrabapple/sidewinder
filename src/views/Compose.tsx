@@ -5,8 +5,10 @@
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { composeOpen, composeContext, closeCompose, lastPosted } from '../state/compose'
-import { saveDraft, loadDraft, clearDraft } from '../state/draft'
+import { saveDraft, loadDraft, clearDraft, type ComposeDraft, type DraftMedia } from '../state/draft'
+import { advancePublication, ensureIdempotencyKeys, mergePresetText, nextPublicationIndex, withMediaIds, type PublicationProgress } from '../state/composePublish'
 import { api, activeSession } from '../state/auth'
+import { NetworkError } from '../api/client'
 import { settings } from '../state/settings'
 import { toast } from '../state/toast'
 import { customEmojis, emojisStatus, ensureEmojis, loadEmojiSet, pickerEmojis, filterPickerEmojis, groupPickerEmojis, type PickerEmoji } from '../state/emojis'
@@ -62,6 +64,7 @@ const DEFAULT_LIMITS: Limits = {
 }
 
 const limitsCache = new Map<string, Limits>()
+const MEDIA_REQUEST_TIMEOUT_MS = 120_000
 
 async function fetchLimits(): Promise<Limits> {
   const base = api.value.base
@@ -83,11 +86,6 @@ async function fetchLimits(): Promise<Limits> {
   } catch {
     return DEFAULT_LIMITS
   }
-}
-
-interface DraftMedia {
-  attachment: MediaAttachment
-  uploading: boolean
 }
 
 type SuggestItem =
@@ -146,11 +144,16 @@ export function ComposeHost() {
   const textRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const lastFocus = useRef<Element | null>(null)
+  const uploadGeneration = useRef(0)
+  const openRef = useRef(open)
+  const discardDraft = useRef(false)
+  const flushDraftRef = useRef<() => void>(() => {})
+  openRef.current = open
 
   const [text, setText] = useState('')
   const [cw, setCw] = useState(false)
   const [spoiler, setSpoiler] = useState('')
-  const [visibility, setVisibility] = useState<Visibility>(settings.value.defaultVisibility)
+  const [visibility, setVisibility] = useState<Status['visibility']>(settings.value.defaultVisibility)
   const [media, setMedia] = useState<DraftMedia[]>([])
   const [pollOn, setPollOn] = useState(false)
   const [pollOptions, setPollOptions] = useState<string[]>(['', ''])
@@ -168,6 +171,9 @@ export function ComposeHost() {
   const [altWarned, setAltWarned] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [chain, setChain] = useState<string[]>([])
+  const [idempotencyKeys, setIdempotencyKeys] = useState<string[]>([])
+  const [publishedCount, setPublishedCount] = useState(0)
+  const [publishedParentId, setPublishedParentId] = useState<string | undefined>(undefined)
   const [suggest, setSuggest] = useState<SuggestItem[]>([])
   const [suggestIdx, setSuggestIdx] = useState(0)
   const [token, setToken] = useState<ActiveToken | null>(null)
@@ -176,41 +182,56 @@ export function ComposeHost() {
   const editing = ctx?.editing
   const replyTo = ctx?.replyTo
 
-  // Debounced draft autosave: new-post drafts persist per account so a
-  // crash or accidental dismissal never loses a half-written post.
+  const makeDraft = (progress: PublicationProgress = { publishedCount, publishedParentId }, keys = idempotencyKeys): ComposeDraft => ({
+    text,
+    cw,
+    spoiler: cw ? spoiler : '',
+    visibility,
+    media,
+    pollOn,
+    pollOptions,
+    pollMultiple,
+    pollExpiry,
+    chain,
+    idempotencyKeys: keys,
+    publishedCount: progress.publishedCount,
+    publishedParentId: progress.publishedParentId,
+    savedAt: Date.now(),
+  })
+
+  flushDraftRef.current = () => {
+    if (!sessionId || editing || replyTo || discardDraft.current) return
+    const hasDraftContent = text.trim().length > 0 || media.length > 0 || chain.some((part) => part.trim().length > 0)
+      || (pollOn && pollOptions.some((option) => option.trim())) || publishedCount > 0
+    if (hasDraftContent) saveDraft(sessionId, makeDraft())
+    else clearDraft(sessionId)
+  }
+
+  // Debounced autosave plus a synchronous close/unmount flush covers both
+  // crashes and dismissal inside the debounce window.
   useEffect(() => {
     if (!open || !sessionId || editing || replyTo) return
-    const t = setTimeout(() => {
-      const hasContent = text.trim().length > 0 || media.length > 0 || (pollOn && pollOptions.some((o) => o.trim()))
-      if (!hasContent) {
-        clearDraft(sessionId)
-        return
-      }
-      saveDraft(sessionId, {
-        text,
-        cw,
-        spoiler: cw ? spoiler : '',
-        visibility,
-        media: media.map((m) => ({ attachment: m.attachment, uploading: false })),
-        pollOn,
-        pollOptions,
-        pollMultiple,
-        pollExpiry,
-        savedAt: Date.now(),
-      })
-    }, 400)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => flushDraftRef.current(), 400)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sessionId, editing, replyTo, text, cw, spoiler, visibility, media, pollOn, pollOptions, pollMultiple, pollExpiry])
+  }, [open, sessionId, editing, replyTo, text, cw, spoiler, visibility, media, pollOn, pollOptions, pollMultiple, pollExpiry, chain, idempotencyKeys, publishedCount, publishedParentId])
+
+  useEffect(() => () => {
+    uploadGeneration.current += 1
+    flushDraftRef.current()
+  }, [])
 
   // Sync native <dialog> with the composeOpen signal.
   useEffect(() => {
     const d = dlgRef.current
     if (!d) return
     if (open && !d.open) {
+      uploadGeneration.current += 1
       lastFocus.current = document.activeElement
       d.showModal()
     } else if (!open && d.open) {
+      flushDraftRef.current()
+      uploadGeneration.current += 1
       d.close()
     }
   }, [open])
@@ -218,6 +239,7 @@ export function ComposeHost() {
   // Reset the draft whenever the dialog opens with a new context.
   useEffect(() => {
     if (!open) return
+    discardDraft.current = false
     setError(null)
     setAltWarned(false)
     setBusy(false)
@@ -232,6 +254,9 @@ export function ComposeHost() {
     setBoostPolicy('default')
     setFavPolicy('default')
     setChain([])
+    setIdempotencyKeys([])
+    setPublishedCount(0)
+    setPublishedParentId(undefined)
     setSuggest([])
     setToken(null)
     if (editing) {
@@ -246,23 +271,33 @@ export function ComposeHost() {
       setCw(false)
     }
     setVisibility(
-      !editing && replyTo && replyTo.visibility !== 'local'
-        ? replyTo.visibility
-        : settings.value.defaultVisibility,
+      editing
+        ? editing.visibility
+        : replyTo && replyTo.visibility !== 'local'
+          ? replyTo.visibility
+          : settings.value.defaultVisibility,
     )
     // Draft recovery: a fresh new-post composer restores the saved draft.
     if (!editing && !replyTo) {
       const saved = loadDraft(sessionId)
-      if (saved && (saved.text.trim() || saved.media.length > 0 || saved.pollOn)) {
-        setText(saved.text)
+      if (saved && (saved.text.trim() || saved.media.length > 0 || saved.pollOn || saved.chain?.some((part) => part.trim()))) {
+        const resumeCount = saved.publishedCount ?? 0
+        const sharedText = ctx?.presetText
+        setText(resumeCount > 0 ? saved.text : mergePresetText(saved.text, sharedText))
         setCw(saved.cw)
         setSpoiler(saved.spoiler)
-        setVisibility(saved.visibility as Visibility)
-        setMedia((saved.media ?? []).map((m) => ({ attachment: m.attachment, uploading: false })))
+        setVisibility(saved.visibility as Status['visibility'])
+        setMedia(saved.media)
         setPollOn(saved.pollOn)
-        setPollOptions(saved.pollOptions ?? ['', ''])
-        setPollMultiple(Boolean(saved.pollMultiple))
-        setPollExpiry(saved.pollExpiry ?? 86400)
+        setPollOptions(saved.pollOptions)
+        setPollMultiple(saved.pollMultiple)
+        setPollExpiry(saved.pollExpiry)
+        setChain(resumeCount > 0 && sharedText?.trim() && !saved.chain?.includes(sharedText) && saved.text !== sharedText
+          ? [...(saved.chain ?? []), sharedText]
+          : saved.chain ?? [])
+        setIdempotencyKeys(saved.idempotencyKeys ?? [])
+        setPublishedCount(resumeCount)
+        setPublishedParentId(saved.publishedParentId)
         toast('Draft restored')
       }
     }
@@ -280,6 +315,9 @@ export function ComposeHost() {
   }, [open])
 
   function close() {
+    flushDraftRef.current()
+    uploadGeneration.current += 1
+    openRef.current = false
     closeCompose()
     const el = lastFocus.current
     if (el instanceof HTMLElement) el.focus()
@@ -391,7 +429,10 @@ export function ComposeHost() {
   }
 
   async function addFiles(files: FileList | File[] | null) {
-    if (!files || busy || pollOn) return
+    if (!files || busy || pollOn || publishedCount > 0) return
+    const generation = uploadGeneration.current
+    const uploadSessionId = sessionId
+    const uploadIsCurrent = () => openRef.current && generation === uploadGeneration.current && activeSession.value?.id === uploadSessionId
     setError(null)
     const room = limits.maxMedia - media.length
     const picks = [...files].slice(0, Math.max(0, room))
@@ -403,28 +444,40 @@ export function ComposeHost() {
         uploading: true,
         attachment: { id: `pending-${Math.random().toString(36).slice(2)}`, type: 'unknown', url: null, preview_url: null, description: null },
       }
-      setMedia((m) => [...m, placeholder])
+      setMedia((items) => [...items, placeholder])
       try {
-        let att = await api.value.request<MediaAttachment>('/api/v2/media', { method: 'POST', body: fd })
+        let att = await api.value.request<MediaAttachment>('/api/v2/media', {
+          method: 'POST',
+          body: fd,
+          timeoutMs: MEDIA_REQUEST_TIMEOUT_MS,
+        })
         // 202 processing: poll until the URL materializes.
-        for (let i = 0; !att.url && i < 6; i++) {
-          await new Promise((r) => setTimeout(r, 1500))
-          att = await api.value.get<MediaAttachment>(`/api/v1/media/${att.id}`)
+        for (let i = 0; !att.url && i < 12; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+          if (!uploadIsCurrent()) return
+          att = await api.value.request<MediaAttachment>(`/api/v1/media/${att.id}`, { timeoutMs: MEDIA_REQUEST_TIMEOUT_MS })
         }
-        if (!att.url) throw new Error('The server is still processing that file. Wait a moment and try again.')
-        setMedia((m) => m.map((d) => (d.attachment.id === placeholder.attachment.id ? { attachment: att, uploading: false } : d)))
+        if (!uploadIsCurrent()) return
+        if (!att.url) throw new Error('The server is still processing that file. Wait a moment, then attach it and try again.')
+        setMedia((items) => items.map((item) => item.attachment.id === placeholder.attachment.id ? { attachment: att, uploading: false } : item))
       } catch (e) {
-        setMedia((m) => m.filter((d) => d.attachment.id !== placeholder.attachment.id))
-        setError(e instanceof Error ? e.message : 'Upload failed. Try a different file.')
+        if (!uploadIsCurrent()) return
+        setMedia((items) => items.filter((item) => item.attachment.id !== placeholder.attachment.id))
+        const networkMessage = e instanceof NetworkError ? `${e.message} ${e.cause instanceof Error ? e.cause.message : ''}` : ''
+        setError(/abort|timeout|timed out/i.test(networkMessage)
+          ? 'Media upload timed out. Check your connection, then attach the file and try again.'
+          : e instanceof Error ? e.message : 'Upload failed. Try a different file.')
       }
     }
   }
 
   function removeMedia(id: string) {
+    if (publishedCount > 0) return
     setMedia((m) => m.filter((d) => d.attachment.id !== id))
   }
 
   async function saveAlt(id: string, description: string) {
+    if (publishedCount > 0) return
     setMedia((m) => m.map((d) => (d.attachment.id === id ? { ...d, attachment: { ...d.attachment, description } } : d)))
     if (id.startsWith('pending-')) return
     try {
@@ -441,8 +494,9 @@ export function ComposeHost() {
   const uploading = media.some((d) => d.uploading)
   const missingAlt = media.some((d) => !d.uploading && !d.attachment.description?.trim())
   const pollValid = !pollOn || (usedPollOptions.length >= 2 && usedPollOptions.every((o) => o.length <= limits.pollMaxChars))
-  const hasContent = text.trim().length > 0 || media.length > 0
+  const hasContent = text.trim().length > 0 || media.length > 0 || publishedCount > 0
   const canSubmit = hasContent && !overLimit && chainValid && !uploading && pollValid && !busy
+    && publishedCount < chain.length + 1
 
   async function submit() {
     if (!canSubmit) return
@@ -453,15 +507,14 @@ export function ComposeHost() {
     }
     setBusy(true)
     setError(null)
-    const body: Record<string, unknown> = {
+    const baseBody: Record<string, unknown> = {
       status: text,
       sensitive: cw,
       spoiler_text: cw ? spoiler : '',
       visibility,
       content_type: 'text/markdown',
     }
-    if (replyTo) body.in_reply_to_id = replyTo.id
-    if (media.length) body.media_ids = media.map((d) => d.attachment.id)
+    if (replyTo) baseBody.in_reply_to_id = replyTo.id
     let policyPayload: Record<string, unknown> | undefined
     if (!editing && (replyPolicy !== 'default' || boostPolicy !== 'default' || favPolicy !== 'default')) {
       // If ANY policy is set, GTS normalizes unspecified sub-policies to
@@ -474,46 +527,59 @@ export function ComposeHost() {
       if (r) ip.can_reply = r
       if (b) ip.can_reblog = b
       if (f) ip.can_favourite = f
-      body.interaction_policy = ip
+      baseBody.interaction_policy = ip
       policyPayload = ip
     }
     if (pollOn && !editing) {
-      body.poll = {
+      baseBody.poll = {
         options: usedPollOptions,
         expires_in: Math.min(Math.max(pollExpiry, limits.pollMinExp), limits.pollMaxExp),
         multiple: pollMultiple,
       }
     }
+    const body = withMediaIds(baseBody, media, Boolean(editing))
     try {
       if (editing) {
         await api.value.put<Status>(`/api/v1/statuses/${editing.id}`, body)
         toast('Post updated')
       } else {
-        let created = await api.value.request<Status>('/api/v1/statuses', {
-          method: 'POST',
-          body,
-          headers: { 'Idempotency-Key': crypto.randomUUID() },
-        })
-        for (const extra of chain) {
-          const trimmed = extra.trim()
-          if (!trimmed) continue
-          const replyBody: Record<string, unknown> = {
-            status: trimmed,
-            sensitive: cw,
-            spoiler_text: cw ? spoiler : '',
-            visibility,
-            content_type: 'text/markdown',
-            in_reply_to_id: created.id,
+        const segments = [text, ...chain]
+        const keys = ensureIdempotencyKeys(idempotencyKeys, segments.length)
+        setIdempotencyKeys(keys)
+        let progress: PublicationProgress = { publishedCount, publishedParentId }
+        let parentId = publishedParentId
+        let created: Status | null = null
+        if (!replyTo && sessionId) saveDraft(sessionId, makeDraft(progress, keys))
+        for (let index = nextPublicationIndex(progress, segments.length); index !== null; index = nextPublicationIndex(progress, segments.length)) {
+          let segmentBody = body
+          if (index > 0) {
+            if (!parentId) throw new Error('The thread could not resume because its published parent is missing. Restore the draft or contact support.')
+            segmentBody = {
+              status: segments[index].trim(),
+              sensitive: cw,
+              spoiler_text: cw ? spoiler : '',
+              visibility,
+              content_type: 'text/markdown',
+              in_reply_to_id: parentId,
+            }
+            if (policyPayload) segmentBody.interaction_policy = policyPayload
           }
-          if (policyPayload) replyBody.interaction_policy = policyPayload
           created = await api.value.request<Status>('/api/v1/statuses', {
             method: 'POST',
-            body: replyBody,
-            headers: { 'Idempotency-Key': crypto.randomUUID() },
+            body: segmentBody,
+            headers: { 'Idempotency-Key': keys[index] },
           })
+          parentId = created.id
+          progress = advancePublication(progress, created.id)
+          setPublishedCount(progress.publishedCount)
+          setPublishedParentId(progress.publishedParentId)
+          if (!replyTo && sessionId) saveDraft(sessionId, makeDraft(progress, keys))
         }
-        lastPosted.value = created
-        clearDraft(sessionId)
+        if (!replyTo && sessionId) {
+          discardDraft.current = true
+          clearDraft(sessionId)
+        }
+        if (created) lastPosted.value = created
         toast(chain.length > 0 ? `Thread posted (${chain.length + 1} posts)` : 'Posted')
       }
       close()
@@ -534,10 +600,11 @@ export function ComposeHost() {
       class={`sw-dialog compose${dragging ? ' compose--dragging' : ''}`}
       aria-labelledby="compose-title"
       onClose={() => {
+        flushDraftRef.current()
         if (composeOpen.value) closeCompose()
       }}
       onCancel={() => {
-        if (composeOpen.value) closeCompose()
+        if (composeOpen.value) close()
       }}
       onDragOver={(e) => {
         if (e.dataTransfer?.types.includes('Files')) {
@@ -638,6 +705,7 @@ export function ComposeHost() {
             }}
             placeholder={replyTo ? 'Write your reply' : "What's on your mind?"}
             aria-label="Post text"
+            disabled={publishedCount > 0}
             rows={6}
             aria-busy={busy || undefined}
           />
@@ -705,7 +773,11 @@ export function ComposeHost() {
                         class="icon-btn compose__chain-remove"
                         aria-label={`Remove post ${idx + 2}`}
                         title={`Remove post ${idx + 2}`}
-                        onClick={() => setChain((c) => c.filter((_, j) => j !== idx))}
+                        disabled={idx < publishedCount - 1}
+                        onClick={() => {
+                          setChain((parts) => parts.filter((_, partIndex) => partIndex !== idx))
+                          setIdempotencyKeys((keys) => keys.filter((_, keyIndex) => keyIndex !== idx + 1))
+                        }}
                       >
                         <Icon name="x" size={16} />
                       </button>
@@ -714,8 +786,9 @@ export function ComposeHost() {
                       class="textarea compose__text compose__chain-text"
                       rows={4}
                       value={part}
+                      disabled={idx < publishedCount - 1}
                       placeholder={`Continue thread (post ${idx + 2})`}
-                      aria-label={`Post ${idx + 2} text`}
+                      aria-label={`Post ${idx + 2} text${idx < publishedCount - 1 ? ' (published)' : ''}`}
                       onInput={(e) => {
                         const val = (e.target as HTMLTextAreaElement).value
                         setChain((c) => c.map((v, j) => (j === idx ? val : v)))
@@ -752,12 +825,14 @@ export function ComposeHost() {
                           class="input"
                           defaultValue={d.attachment.description ?? ''}
                           placeholder="Describe this media (alt text)"
+                          disabled={publishedCount > 0}
                           onChange={(e) => void saveAlt(d.attachment.id, (e.target as HTMLInputElement).value)}
                         />
                       </label>
                       <button
                         type="button"
                         class="icon-btn compose__media-remove"
+                        disabled={publishedCount > 0}
                         onClick={() => removeMedia(d.attachment.id)}
                         aria-label="Remove attachment"
                         title="Remove attachment"
@@ -772,7 +847,7 @@ export function ComposeHost() {
           )}
 
           {pollOn && !editing && (
-            <fieldset class="compose__poll">
+            <fieldset class="compose__poll" disabled={publishedCount > 0}>
               <legend class="visually-hidden">Poll options</legend>
               {pollOptions.map((opt, i) => (
                 <div class="compose__poll-row" key={i}>
@@ -844,7 +919,7 @@ export function ComposeHost() {
               type="button"
               class="icon-btn"
               onClick={() => fileRef.current?.click()}
-              disabled={pollOn || media.length >= limits.maxMedia || uploading}
+              disabled={publishedCount > 0 || pollOn || media.length >= limits.maxMedia || uploading}
               aria-label="Attach media"
               title={pollOn ? 'Polls cannot have media' : 'Attach media'}
             >
@@ -855,7 +930,7 @@ export function ComposeHost() {
               class="icon-btn"
               data-active={pollOn || undefined}
               onClick={() => setPollOn((v) => !v)}
-              disabled={Boolean(editing) || media.length > 0}
+              disabled={publishedCount > 0 || Boolean(editing) || media.length > 0}
               aria-label="Toggle poll"
               title={editing ? 'Polls cannot be edited' : media.length > 0 ? 'Remove media to add a poll' : 'Add a poll'}
             >
@@ -918,6 +993,7 @@ export function ComposeHost() {
                 {(Object.keys(VISIBILITY_LABELS) as Visibility[]).map((v) => (
                   <option key={v} value={v}>{VISIBILITY_LABELS[v]}</option>
                 ))}
+                {visibility === 'local' && <option value="local">Local to this instance</option>}
               </select>
             </label>
             <button type="submit" class="btn btn--primary compose__submit" disabled={!canSubmit}>
@@ -925,11 +1001,13 @@ export function ComposeHost() {
                 ? 'Publishing…'
                 : editing
                   ? 'Save changes'
-                  : chain.length > 0
-                    ? `Post thread (${chain.length + 1})`
-                    : replyTo
-                      ? 'Reply'
-                      : 'Post'}
+                  : publishedCount > 0
+                    ? `Resume thread (${chain.length + 1 - publishedCount} left)`
+                    : chain.length > 0
+                      ? `Post thread (${chain.length + 1})`
+                      : replyTo
+                        ? 'Reply'
+                        : 'Post'}
             </button>
           </div>
 

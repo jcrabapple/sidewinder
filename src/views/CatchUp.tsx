@@ -24,6 +24,7 @@ import { replaceEmojis } from '../components/StatusCard'
 import { Icon } from '../components/Icon'
 import { useTitle, navigate } from '../router'
 import { formatCompact, formatAbsolute, formatCount } from '../util/time'
+import { newestWrapperId } from '../util/statusRows'
 import './CatchUp.css'
 
 type Filter = 'all' | 'originals' | 'boosts' | 'replies'
@@ -94,7 +95,7 @@ export function CatchUpView() {
   const [error, setError] = useState<string | null>(null)
   const requestSeq = useRef(0)
 
-  async function load() {
+  async function load(readBoundary = boundary) {
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
@@ -117,7 +118,7 @@ export function CatchUpView() {
               passedBoundary = true
               break
             }
-          } else if (boundary && s.id <= boundary) {
+          } else if (readBoundary && s.id <= readBoundary) {
             passedBoundary = true
             break
           }
@@ -140,18 +141,19 @@ export function CatchUpView() {
 
   function handleMarkCaughtUp() {
     if (items.length === 0) return
-    const newest = items[items.length - 1]
-    const newestId = newest.reblog?.id ?? newest.id
-    raiseSeenTop(sessionId, 'home::', newestId)
-    queueMarkerPush('home', newestId)
+    const newestId = newestWrapperId(items)
+    const previous = raiseSeenTop(sessionId, 'home::', newestId)
+    if (newestId > previous) queueMarkerPush('home', newestId)
     toast('Marked home timeline as read', 'info')
-    void load()
+    // Pass the raised mark directly: this render's closure still holds the
+    // previous boundary, and the storage change must not trigger a second load.
+    void load(newestId)
   }
 
   useEffect(() => {
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, windowMode, boundary])
+  }, [sessionId, windowMode])
 
   // Boost dedupe: collapse wrappers of the same original into one entry.
   const entries = useMemo<DigestEntry[]>(() => {

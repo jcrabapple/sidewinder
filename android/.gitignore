@@ -2,6 +2,11 @@
 build/
 .kotlin/
 local.properties
+key.properties
+*.jks
+*.keystore
+*.pem
+google-services.json
 .idea/
 *.iml
 captures/

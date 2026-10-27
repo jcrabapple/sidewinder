@@ -107,7 +107,7 @@
 .wrapped__bar-label {
   display: block;
   text-align: center;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--fg-muted);
   padding-top: 4px;
   min-height: 16px;

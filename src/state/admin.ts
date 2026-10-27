@@ -5,10 +5,12 @@
  * freshly approved signup still cannot log in until its email is confirmed.
  * This instance runs a tiny localhost helper (gts-confirm-helper, exposed by
  * caddy at /gts-admin-helper/*) that runs the CLI confirm; approveSignup
- * calls it as the second step. Without the helper, approve falls back to an
- * error carrying the exact CLI command.
+ * calls it as the second step. Without the helper, approve returns partial
+ * success with a warning carrying the exact CLI command.
  */
 import { api, activeSession } from './auth'
+import type { Page } from '../api/client'
+import { invalidateSignupLookup, markSignupHandled } from './signupNotifications'
 
 export interface AdminAccount {
   id: string
@@ -37,16 +39,28 @@ export function hasAdminScope(): boolean {
 const HELPER_URL = location.origin + '/gts-admin-helper/confirm'
 
 /**
- * Accounts waiting on approval. The GTS `status=pending` filter returns some
- * internal rows (confirmed:false/approved:false), so filter to real humans:
- * local, unconfirmed, unapproved, and not the instance actor.
+ * Accounts waiting on approval. GTS filters with `pending=true`; its result
+ * can still contain internal rows, so filter to real local humans after
+ * following up to ten Link-header cursors.
  */
 export async function fetchPendingSignups(): Promise<AdminAccount[]> {
-  const list = await api.value.get<AdminAccount[]>('/api/v1/admin/accounts', {
-    status: 'pending',
-  })
-  const host = new URL(api.value.base).hostname
-  return (list ?? []).filter(
+  const client = api.value
+  const sessionId = activeSession.value?.id ?? ''
+  const list: AdminAccount[] = []
+  let maxId: string | null = null
+  for (let depth = 0; depth < 10; depth += 1) {
+    const page: Page<AdminAccount> = await client.page<AdminAccount>('/api/v1/admin/accounts', {
+      query: { pending: true, local: true, limit: 80, max_id: maxId ?? undefined },
+    })
+    if ((activeSession.value?.id ?? '') !== sessionId) {
+      throw new Error('The active account changed while signups were loading. Try again.')
+    }
+    list.push(...page.items)
+    if (!page.nextMaxId) break
+    maxId = page.nextMaxId
+  }
+  const host = new URL(client.base).hostname
+  return list.filter(
     (a) => a.domain === null && !a.approved && !a.confirmed && a.username !== host,
   )
 }
@@ -55,23 +69,62 @@ export function signupReason(a: AdminAccount): string {
   return (a.invite_request ?? a.reason ?? '').trim()
 }
 
+export type SignupApprovalResult =
+  | { status: 'confirmed' }
+  | { status: 'approved_unconfirmed'; warning: string }
+
 /**
  * Approve a pending signup AND confirm its email (the step GTS has no API
- * for). Throws with a helpful message if the second step fails, since an
- * approved-but-unconfirmed account still cannot log in.
+ * for). An already-approved account proceeds directly to confirmation. Once
+ * approval has happened, helper failure is partial success rather than a
+ * failed approval: the caller must remove the stale moderation actions.
  */
-export async function approveSignup(a: AdminAccount): Promise<void> {
-  await api.value.post(`/api/v1/admin/accounts/${encodeURIComponent(a.id)}/approve`)
+export async function approveSignup(a: AdminAccount): Promise<SignupApprovalResult> {
+  const session = activeSession.value
+  if (!session) throw new Error('Sign in again before approving this signup.')
+  const sessionId = session.id
+  const token = session.token
+  const client = api.value
+  const accountPath = `/api/v1/admin/accounts/${encodeURIComponent(a.id)}`
+  invalidateSignupLookup(a.id, sessionId)
 
-  const res = await fetch(HELPER_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${activeSession.value?.token ?? ''}`,
-    },
-    body: JSON.stringify({ username: a.username, account_id: a.id }),
-  })
-  if (res.ok) return
+  try {
+    await client.post(`${accountPath}/approve`)
+  } catch (approvalError) {
+    // A retry can race another admin or a previously successful request whose
+    // response was lost. Confirm the actual state before reporting failure.
+    try {
+      const current = await client.get<AdminAccount>(accountPath)
+      if (!current.approved && !current.confirmed) throw approvalError
+    } catch {
+      throw approvalError
+    }
+  }
+
+  // From this point Deny would be destructive stale UI, even if email
+  // confirmation fails below. Cache under the session that performed it.
+  markSignupHandled(a.id, sessionId)
+
+  let res: Response
+  try {
+    res = await fetch(HELPER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ username: a.username, account_id: a.id }),
+    })
+  } catch (value) {
+    const detail = value instanceof Error ? value.message : String(value)
+    return {
+      status: 'approved_unconfirmed',
+      warning: `Approved, but the email confirmation step failed (${detail}). ` +
+        `They cannot log in until it runs: podman exec gotosocial /gotosocial/gotosocial ` +
+        `admin account confirm --username ${a.username}`,
+    }
+  }
+  if (res.ok) return { status: 'confirmed' }
 
   let detail = `helper returned ${res.status}`
   try {
@@ -80,19 +133,22 @@ export async function approveSignup(a: AdminAccount): Promise<void> {
   } catch {
     // keep the status fallback
   }
-  if (res.status === 404) {
-    detail = 'helper not reachable'
-  }
-  throw new Error(
-    `Approved, but the email confirmation step failed (${detail}). ` +
+  if (res.status === 404) detail = 'helper not reachable'
+  return {
+    status: 'approved_unconfirmed',
+    warning: `Approved, but the email confirmation step failed (${detail}). ` +
       `They cannot log in until it runs: podman exec gotosocial /gotosocial/gotosocial ` +
       `admin account confirm --username ${a.username}`,
-  )
+  }
 }
 
 /** Deny a pending signup. Rejecting removes the pending account. */
 export async function denySignup(id: string): Promise<void> {
-  await api.value.post(`/api/v1/admin/accounts/${encodeURIComponent(id)}/reject`)
+  const sessionId = activeSession.value?.id ?? ''
+  const client = api.value
+  invalidateSignupLookup(id, sessionId)
+  await client.post(`/api/v1/admin/accounts/${encodeURIComponent(id)}/reject`)
+  markSignupHandled(id, sessionId)
 }
 
 // ---------------------------------------------------------------------------

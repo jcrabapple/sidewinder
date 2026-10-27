@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.LockOpen
+import androidx.compose.material.icons.outlined.Mood
 import androidx.compose.material.icons.outlined.Poll
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Schedule
@@ -65,6 +66,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -91,8 +93,20 @@ internal val VISIBILITY_OPTIONS = listOf(
     VisibilityOption("direct", "Direct", "Only the people you mention", Icons.Outlined.AlternateEmail),
 )
 
+/**
+ * The picker's display record for a visibility value. Known values get
+ * their label/description; a server-specific value (local, mutuals_only,
+ * …) keeps its actual name and a neutral description instead of being
+ * mislabeled "Public" while another value is submitted.
+ */
 internal fun visibilityOption(value: String): VisibilityOption =
-    VISIBILITY_OPTIONS.firstOrNull { it.value == value } ?: VISIBILITY_OPTIONS.first()
+    VISIBILITY_OPTIONS.firstOrNull { it.value == value }
+        ?: VisibilityOption(
+            value = value,
+            label = value.ifBlank { "Server visibility" },
+            description = "Set by your server",
+            icon = Icons.Outlined.Visibility,
+        )
 
 /** Visibility reach rank; a reply may not be more public than its parent.
  *  Unknown or server-specific values (local, mutuals_only) rank 0, which
@@ -509,6 +523,105 @@ internal fun expiryLabel(seconds: Long): String =
     EXPIRY_OPTIONS.firstOrNull { it.first == seconds }?.second ?: "${seconds / 3600} hours"
 
 /**
+ * The thread builder: text-only follow-up posts. Segments already
+ * published by a partial success are read-only and cannot be removed, so a
+ * retry can never repost or orphan them. Add/remove are 48dp targets with
+ * labels; each segment shows its own weighted character count.
+ */
+@Composable
+internal fun ChainEditor(
+    segments: List<ChainSegment>,
+    postedCount: Int,
+    enabled: Boolean,
+    cwOn: Boolean,
+    spoiler: String,
+    failure: String?,
+    onTextChange: (Int, TextFieldValue) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Thread", style = MaterialTheme.typography.titleSmall)
+        if (failure != null) {
+            Text(
+                failure,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.semantics { contentDescription = failure },
+            )
+        }
+        segments.forEachIndexed { index, segment ->
+            val posted = chainSegmentPosted(index, postedCount)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(chainPostLabel(index), style = MaterialTheme.typography.labelLarge)
+                    if (posted) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "Posted",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (!posted) {
+                        IconButton(
+                            onClick = { onRemove(index) },
+                            enabled = enabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Remove ${chainPostLabel(index)}"
+                            },
+                        ) { Icon(Icons.Filled.Close, contentDescription = null) }
+                    }
+                }
+                OutlinedTextField(
+                    value = segment.value,
+                    onValueChange = { value -> if (!posted) onTextChange(index, value) },
+                    enabled = enabled && !posted,
+                    readOnly = posted,
+                    placeholder = { Text("Continue the thread") },
+                    keyboardOptions = ProseKeyboard,
+                    supportingText = {
+                        val message = chainSegmentMessage(segment.value.text, cwOn, spoiler)
+                        if (message != null) {
+                            Text(message)
+                        } else {
+                            Text("${CHAR_LIMIT - chainSegmentUsed(segment.value.text, cwOn, spoiler)} characters remaining")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics {
+                            contentDescription = if (posted) {
+                                "${chainPostLabel(index)}, already published"
+                            } else {
+                                "${chainPostLabel(index)}, thread text. Markdown is supported."
+                            }
+                        },
+                )
+            }
+        }
+        if (segments.size < MAX_CHAIN_SEGMENTS) {
+            TextButton(
+                onClick = onAdd,
+                enabled = enabled,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Add a post to the thread" },
+            ) { Text("Add post to thread") }
+        }
+    }
+}
+
+/**
  * Bottom toolbar (Tusky/Moshidon layout): attach, poll, content warning,
  * sensitive-media toggle, and the remaining-characters ring.
  */
@@ -516,6 +629,8 @@ internal fun expiryLabel(seconds: Long): String =
 internal fun ComposeToolbar(
     canAddMedia: Boolean,
     onAddMedia: () -> Unit,
+    emojiEnabled: Boolean,
+    onOpenEmoji: () -> Unit,
     pollOn: Boolean,
     pollEnabled: Boolean,
     onTogglePoll: () -> Unit,
@@ -525,6 +640,7 @@ internal fun ComposeToolbar(
     onToggleSchedule: () -> Unit = {},
     scheduleEnabled: Boolean = true,
     hasMedia: Boolean,
+    editing: Boolean = false,
     sensitive: Boolean,
     onToggleSensitive: () -> Unit,
     used: Int,
@@ -545,6 +661,11 @@ internal fun ComposeToolbar(
                 enabled = canAddMedia,
                 modifier = Modifier.semantics { contentDescription = "Add images" },
             ) { Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null) }
+            IconButton(
+                onClick = onOpenEmoji,
+                enabled = emojiEnabled,
+                modifier = Modifier.semantics { contentDescription = "Add custom emoji" },
+            ) { Icon(Icons.Outlined.Mood, contentDescription = null) }
             IconToggleButton(
                 checked = pollOn,
                 onCheckedChange = { onTogglePoll() },
@@ -566,12 +687,12 @@ internal fun ComposeToolbar(
                     contentDescription = if (scheduleOn) "Remove the schedule" else "Schedule this post"
                 },
             ) { Icon(Icons.Outlined.Schedule, contentDescription = null, tint = toggleTint(scheduleOn, scheduleEnabled)) }
-            if (hasMedia) {
+            if (hasMedia || editing) {
                 IconToggleButton(
                     checked = sensitive,
                     onCheckedChange = { onToggleSensitive() },
                     modifier = Modifier.semantics {
-                        contentDescription = if (sensitive) "Media marked sensitive. Unmark" else "Mark media as sensitive"
+                        contentDescription = if (sensitive) "Sensitive content. Unmark" else "Mark content sensitive"
                     },
                 ) {
                     Icon(

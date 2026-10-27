@@ -19,8 +19,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +59,7 @@ private sealed interface AccountListState {
         val items: List<Account>,
         val nextMaxId: String?,
         val loadingMore: Boolean,
+        val loadMoreError: String? = null,
     ) : AccountListState
 }
 
@@ -80,7 +79,6 @@ fun AccountListScreen(
 ) {
     var state by remember { mutableStateOf<AccountListState>(AccountListState.Loading) }
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
     // A caller passing an unexpected kind would 404; clamp to the two
@@ -102,16 +100,12 @@ fun AccountListScreen(
         }
     }
 
-    fun showNotice(message: String) {
-        scope.launch { snackbarHostState.showSnackbar(message) }
-    }
-
     fun loadNextPage() {
         val current = state as? AccountListState.Content ?: return
         val maxId = current.nextMaxId ?: return // end reached
         if (current.loadingMore) return
 
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreError = null)
         scope.launch {
             try {
                 val page = ProfileRepository.accountList(api, accountId, safeKind, maxId)
@@ -120,13 +114,21 @@ fun AccountListScreen(
                 val fresh = page.items.filterNot { it.id in baseIds }
                 state = AccountListState.Content(base + fresh, page.nextMaxId, loadingMore = false)
             } catch (e: ApiError) {
-                (state as? AccountListState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                showNotice("Could not load more accounts: the server returned error ${e.status}. Scroll to try again.")
+                (state as? AccountListState.Content)?.let { latest ->
+                    state = latest.copy(
+                        loadingMore = false,
+                        loadMoreError = "Could not load more accounts: the server returned error ${e.status}. Check your connection, then retry.",
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                (state as? AccountListState.Content)?.let { latest -> state = latest.copy(loadingMore = false) }
-                showNotice("Could not load more accounts: ${e.message ?: "network error"}. Scroll to try again.")
+                (state as? AccountListState.Content)?.let { latest ->
+                    state = latest.copy(
+                        loadingMore = false,
+                        loadMoreError = "Could not load more accounts: ${e.message ?: "network error"}. Check your connection, then retry.",
+                    )
+                }
             }
         }
     }
@@ -140,14 +142,13 @@ fun AccountListScreen(
             lastVisible to state
         }.collect { (lastVisible, snapshot) ->
             val current = snapshot as? AccountListState.Content ?: return@collect
-            if (current.nextMaxId == null || current.loadingMore) return@collect
+            if (current.nextMaxId == null || current.loadingMore || current.loadMoreError != null) return@collect
             if (lastVisible >= current.items.size - 3) loadNextPage()
         }
     }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         when (val s = state) {
             AccountListState.Loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
@@ -222,6 +223,24 @@ fun AccountListScreen(
                             CircularProgressIndicator(
                                 modifier = Modifier.semantics { contentDescription = "Loading more accounts" },
                             )
+                        }
+                    }
+                } else if (s.loadMoreError != null) {
+                    item(key = "load-more-error") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(s.loadMoreError, style = MaterialTheme.typography.bodyMedium)
+                            Button(
+                                onClick = { loadNextPage() },
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .semantics { contentDescription = "Retry loading more accounts" },
+                            ) {
+                                Text("Retry")
+                            }
                         }
                     }
                 }

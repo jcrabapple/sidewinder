@@ -88,6 +88,8 @@ private data class EditorState(
     val thread: Boolean = false,
     val action: String = "warn",
     val expirySeconds: Long? = null,
+    val existingExpiresAt: String? = null,
+    val expiryChanged: Boolean = false,
     val keywords: List<KeywordRow> = emptyList(),
 )
 
@@ -110,8 +112,7 @@ private val editorJson = Json { ignoreUnknownKeys = true }
 private val editorSaver = Saver<EditorState?, String>(
     save = { value -> value?.let { editorJson.encodeToString(EditorState.serializer(), it) } },
     restore = { text ->
-        if (text == null) null
-        else runCatching { editorJson.decodeFromString(EditorState.serializer(), text) }.getOrNull()
+        runCatching { editorJson.decodeFromString(EditorState.serializer(), text) }.getOrNull()
     },
 )
 
@@ -128,6 +129,30 @@ internal fun formatExpiresAt(iso: String): String? = try {
     ).format(java.util.Date.from(instant))
 } catch (e: Exception) {
     null
+}
+
+/**
+ * Resolves an edit's expiry at save time. An untouched expiry is reduced by
+ * the time spent in the editor; an explicit choice, including Never, is sent
+ * unchanged. Already-expired timestamps have no positive duration to send.
+ */
+internal fun expiresInForUpdate(
+    existingExpiresAt: String?,
+    expiryChanged: Boolean,
+    requestedSeconds: Long?,
+    now: java.time.Instant,
+): Long? {
+    if (expiryChanged) return requestedSeconds
+    val expiresAt = existingExpiresAt ?: return null
+    val expiry = try {
+        java.time.OffsetDateTime.parse(expiresAt).toInstant()
+    } catch (e: java.time.format.DateTimeParseException) {
+        return null
+    }
+    val remainingMillis = java.time.Duration.between(now, expiry).toMillis()
+    if (remainingMillis <= 0L) return null
+    val wholeSeconds = remainingMillis / 1_000L
+    return if (remainingMillis % 1_000L == 0L) wholeSeconds else wholeSeconds + 1L
 }
 
 /**
@@ -210,9 +235,15 @@ fun FiltersScreen(
                         editorState.keywords.map { it.keyword to it.wholeWord },
                     )
                 } else {
+                    val expiresIn = expiresInForUpdate(
+                        editorState.existingExpiresAt,
+                        editorState.expiryChanged,
+                        editorState.expirySeconds,
+                        java.time.Instant.now(),
+                    )
                     FiltersRepository.update(
                         api, session.token, existingId, editorState.title, contexts,
-                        editorState.expirySeconds, editorState.action,
+                        expiresIn, editorState.action,
                         editorState.keywords.map { Triple(it.keyword, it.wholeWord, it.existingId) },
                     )
                 }
@@ -309,7 +340,9 @@ fun FiltersScreen(
                                 public = "public" in filter.context,
                                 thread = "thread" in filter.context,
                                 action = filter.filter_action,
-                                expirySeconds = null, // expiry is one-shot at save; existing expiry shown in the row
+                                expirySeconds = null,
+                                existingExpiresAt = filter.expires_at?.takeIf { it.isNotBlank() },
+                                expiryChanged = false,
                                 keywords = filter.keywords.map { KeywordRow(it.keyword, it.whole_word, it.id) },
                             )
                         },
@@ -508,12 +541,26 @@ private fun FilterEditorDialog(
                         onStateChange(state.copy(action = ACTIONS.first { it.second == label }.first))
                     },
                 )
+                val currentExpiry = state.existingExpiresAt?.let { expiresAt ->
+                    "Current: ${formatExpiresAt(expiresAt) ?: expiresAt}"
+                }
                 DropdownField(
                     label = "Expires",
-                    value = EXPIRIES.firstOrNull { it.second == state.expirySeconds }?.first ?: "Never",
-                    options = EXPIRIES.map { it.first },
+                    value = if (!state.expiryChanged && currentExpiry != null) {
+                        currentExpiry
+                    } else {
+                        EXPIRIES.firstOrNull { it.second == state.expirySeconds }?.first ?: "Never"
+                    },
+                    options = listOfNotNull(currentExpiry) + EXPIRIES.map { it.first },
                     onSelect = { label ->
-                        onStateChange(state.copy(expirySeconds = EXPIRIES.first { it.first == label }.second))
+                        if (label == currentExpiry) {
+                            onStateChange(state.copy(expirySeconds = null, expiryChanged = false))
+                        } else {
+                            onStateChange(state.copy(
+                                expirySeconds = EXPIRIES.first { it.first == label }.second,
+                                expiryChanged = true,
+                            ))
+                        }
                     },
                 )
 

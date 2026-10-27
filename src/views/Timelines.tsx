@@ -18,6 +18,7 @@ import { MutedPost } from '../components/MutedPost'
 import { Icon } from '../components/Icon'
 import { useTitle } from '../router'
 import { scrollToTop } from '../util/scroll'
+import { statusRowMatches } from '../util/statusRows'
 import './Timelines.css'
 
 export interface TimelinePageProps {
@@ -295,7 +296,9 @@ export function TimelinePage(props: TimelinePageProps) {
     try {
       const page = await api.value.page<Status>(endpoint(props), {
         query: { limit: PAGE_SIZE, max_id: nextMaxId, local: props.kind === 'local' ? true : undefined },
+        timeoutMs: timeoutFor(props),
       })
+      setError(null)
       setItems((cur) => {
         const seen = new Set(cur.map((s) => s.id))
         return [...cur, ...page.items.filter((s) => !seen.has(s.id))]
@@ -519,11 +522,14 @@ export function TimelinePage(props: TimelinePageProps) {
   }
 
   function showPending() {
+    const existing = new Set(itemsRef.current.map((s) => s.id))
+    const revealed = pending.filter((s) => !existing.has(s.id))
     setItems((cur) => {
       const seen = new Set(cur.map((s) => s.id))
       return [...pending.filter((s) => !seen.has(s.id)), ...cur]
     })
     setPending([])
+    void recordSeenPosts(revealed)
   }
 
   function onStatusUpdated(s: Status) {
@@ -531,8 +537,8 @@ export function TimelinePage(props: TimelinePageProps) {
   }
 
   function onStatusDeleted(id: string) {
-    setItems((cur) => cur.filter((it) => it.id !== id && it.reblog?.id !== id))
-    setPending((cur) => cur.filter((it) => it.id !== id))
+    setItems((cur) => cur.filter((it) => !statusRowMatches(it, id)))
+    setPending((cur) => cur.filter((it) => !statusRowMatches(it, id)))
   }
 
   const heading = props.kind === 'list' && listTitle ? listTitle : title

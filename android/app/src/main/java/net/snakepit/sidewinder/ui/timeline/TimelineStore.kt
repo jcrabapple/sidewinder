@@ -21,6 +21,7 @@ internal sealed interface TimelineState {
         val items: List<Status>,
         val nextMaxId: String?,
         val loadingMore: Boolean,
+        val loadMoreError: String? = null,
     ) : TimelineState
 }
 
@@ -32,6 +33,7 @@ internal sealed interface TimelineState {
  */
 internal class TimelineHolder {
     var state by mutableStateOf<TimelineState>(TimelineState.Loading)
+    var pendingNewPosts by mutableStateOf(0)
     var firstVisibleIndex: Int = 0
     var firstVisibleOffset: Int = 0
 }
@@ -116,7 +118,7 @@ internal object TimelineStore {
             // An empty (but finished) feed must not drop the post: the
             // composer closed, so the user expects to see what they wrote.
             TimelineState.Empty -> {
-                home.state = TimelineState.Content(listOf(status), nextMaxId = null, loadingMore = false)
+                home.state = TimelineState.Content(listOf(status), nextMaxId = status.id, loadingMore = false)
             }
             else -> Unit
         }
@@ -126,15 +128,29 @@ internal object TimelineStore {
      * Live home-timeline update from the streaming socket: prepend a new
      * post from a followed account to this session's cached Home feed
      * (replies included — the home stream mirrors the home timeline, which
-     * carries replies to people you follow). No-ops when the feed is not
-     * currently holding content; the next refresh picks those up.
+     * carries replies to people you follow). Loading and failed feeds are
+     * left alone; their next load picks up anything missed.
      */
     fun applyStreamed(sessionId: String, status: Status) {
         val home = holders[key(sessionId, TimelineSource.Home)] ?: return
-        val current = home.state as? TimelineState.Content ?: return
-        if (current.items.any { it.id == status.id }) return
-        home.state = current.copy(items = listOf(status) + current.items)
-        if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
+        when (val current = home.state) {
+            is TimelineState.Content -> {
+                if (current.items.any { it.id == status.id }) return
+                home.state = current.copy(items = listOf(status) + current.items)
+                // Count every prepend. If the new row is already visible at
+                // the top, TimelineScreen clears this immediately; if the
+                // list anchors the old row, the pill explains what happened.
+                home.pendingNewPosts += 1
+                // Keep the reader's place: the new row shifts everything down one.
+                if (home.firstVisibleIndex > 0) home.firstVisibleIndex += 1
+            }
+            TimelineState.Empty -> {
+                // The streamed id is a real max_id cursor, so older pages
+                // remain reachable instead of dead-ending on this one row.
+                home.state = TimelineState.Content(listOf(status), nextMaxId = status.id, loadingMore = false)
+            }
+            else -> Unit
+        }
     }
 
     private fun mapAll(transform: (List<Status>) -> List<Status>) {

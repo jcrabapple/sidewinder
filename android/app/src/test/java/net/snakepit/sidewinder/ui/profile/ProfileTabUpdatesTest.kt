@@ -26,6 +26,26 @@ class ProfileTabUpdatesTest {
         )
 
     @Test
+    fun `pinned posts lead normal posts without duplicate ids`() {
+        val pinned = listOf(status("pinned-2"), status("pinned-1"))
+        val ordinary = listOf(status("ordinary"), status("pinned-1"), status("older"))
+
+        val result = ProfileTabUpdates.mergedPosts(pinned, ordinary)
+
+        assertEquals(listOf("pinned-2", "pinned-1", "ordinary", "older"), result.map { it.id })
+    }
+
+    @Test
+    fun `duplicates already inside either pinned or normal pages are removed`() {
+        val result = ProfileTabUpdates.mergedPosts(
+            pinned = listOf(status("pinned"), status("pinned")),
+            posts = listOf(status("ordinary"), status("ordinary")),
+        )
+
+        assertEquals(listOf("pinned", "ordinary"), result.map { it.id })
+    }
+
+    @Test
     fun `update replaces the matching row by id`() {
         val items = listOf(status("1"), status("2"))
         val updated = status("2", favourited = true)

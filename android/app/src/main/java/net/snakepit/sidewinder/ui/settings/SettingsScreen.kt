@@ -8,21 +8,36 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.outlined.AdminPanelSettings
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.FilterList
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.outlined.MailOutline
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -37,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -293,9 +309,26 @@ fun SettingsScreen(
             onTextScale = { value -> apply { it.copy(textScale = value) } },
         )
 
-        SettingsSectionHeader("Timelines")
+        SettingsSectionHeader("Notifications")
+        ToggleRow(
+            title = "Background notifications",
+            subtitle = "Checks for new notifications every 15 minutes in the background. " +
+                "Uses the notification permission.",
+            checked = loaded.backgroundNotifications,
+            label = "Background notifications toggle",
+            onCheckedChange = { value -> apply { it.copy(backgroundNotifications = value) } },
+        )
+        SettingsNavigationRow(
+            title = "Direct messages",
+            subtitle = "Conversations from direct and mentioned posts.",
+            icon = Icons.Outlined.MailOutline,
+            description = "Open your direct messages",
+            onClick = onOpenDms,
+        )
+
+        SettingsSectionHeader("Reading")
         Text(
-            text = "Applies to the Home, Local and Federated feeds.",
+            text = "Feed filters apply to the Home, Local and Federated feeds.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 4.dp),
@@ -321,8 +354,13 @@ fun SettingsScreen(
             label = "Hide self-boosts toggle",
             onCheckedChange = { value -> apply { it.copy(hideSelfBoosts = value) } },
         )
-
-        SettingsSectionHeader("General")
+        ToggleRow(
+            title = "Collapse long posts",
+            subtitle = "Shorten long timeline posts behind a Show more button.",
+            checked = loaded.collapseLongPosts,
+            label = "Collapse long posts toggle",
+            onCheckedChange = { value -> apply { it.copy(collapseLongPosts = value) } },
+        )
         ToggleRow(
             title = "Relative times",
             subtitle = "Show timestamps like \"3m\" instead of absolute dates.",
@@ -330,77 +368,6 @@ fun SettingsScreen(
             label = "Relative times toggle",
             onCheckedChange = { value -> apply { it.copy(relativeTimes = value) } },
         )
-
-        VisibilityRow(
-            current = loaded.defaultVisibility,
-            onSelect = { visibility -> apply { it.copy(defaultVisibility = visibility) } },
-        )
-
-        ToggleRow(
-            title = "Require alt text",
-            subtitle = "Ask for confirmation before posting media without descriptions.",
-            checked = loaded.requireAltText,
-            label = "Require alt text toggle",
-            onCheckedChange = { value -> apply { it.copy(requireAltText = value) } },
-        )
-
-        ToggleRow(
-            title = "Background notifications",
-            subtitle = "Checks for new notifications every 15 minutes in the background. " +
-                "Uses the notification permission.",
-            checked = loaded.backgroundNotifications,
-            label = "Background notifications toggle",
-            onCheckedChange = { value -> apply { it.copy(backgroundNotifications = value) } },
-        )
-
-        ToggleRow(
-            title = "Hide engagement counts",
-            subtitle = "Don't show reply, boost and favourite counts on posts.",
-            checked = loaded.hideEngagementCounts,
-            label = "Hide engagement counts toggle",
-            onCheckedChange = { value -> apply { it.copy(hideEngagementCounts = value) } },
-        )
-
-        ToggleRow(
-            title = "Confirm before boosting",
-            subtitle = "Ask before sharing a post with your followers.",
-            checked = loaded.confirmBeforeBoost,
-            label = "Confirm before boosting toggle",
-            onCheckedChange = { value -> apply { it.copy(confirmBeforeBoost = value) } },
-        )
-
-        ToggleRow(
-            title = "Confirm before following",
-            subtitle = "Ask before sending a follow request.",
-            checked = loaded.confirmBeforeFollow,
-            label = "Confirm before following toggle",
-            onCheckedChange = { value -> apply { it.copy(confirmBeforeFollow = value) } },
-        )
-
-        ToggleRow(
-            title = "Hide media previews",
-            subtitle = "Don't show images and videos in timelines. Media stays visible in threads.",
-            checked = loaded.hideMediaPreviews,
-            label = "Hide media previews toggle",
-            onCheckedChange = { value -> apply { it.copy(hideMediaPreviews = value) } },
-        )
-
-        ToggleRow(
-            title = "Hide posts without alt text",
-            subtitle = "Only show timeline posts whose media have descriptions.",
-            checked = loaded.hideNoAltPosts,
-            label = "Hide posts without alt text toggle",
-            onCheckedChange = { value -> apply { it.copy(hideNoAltPosts = value) } },
-        )
-
-        ToggleRow(
-            title = "Reduce motion",
-            subtitle = "Tone down animations like the back-to-top pill.",
-            checked = loaded.reduceMotion,
-            label = "Reduce motion toggle",
-            onCheckedChange = { value -> apply { it.copy(reduceMotion = value) } },
-        )
-
         ToggleRow(
             title = "Live streaming",
             subtitle = "New posts and notifications arrive in real time while the app is open. " +
@@ -409,168 +376,124 @@ fun SettingsScreen(
             label = "Live streaming toggle",
             onCheckedChange = { value -> apply { it.copy(liveStreaming = value) } },
         )
+        SettingsNavigationRow(
+            title = "Lists",
+            subtitle = "Create lists of accounts and follow their timelines.",
+            icon = Icons.AutoMirrored.Outlined.List,
+            description = "Manage your lists",
+            onClick = onOpenLists,
+        )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable(onClick = onOpenFilters)
-                .semantics { contentDescription = "Manage your filters" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Filters", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Hide or blur posts matching keywords you choose.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        SettingsSectionHeader("Wellbeing")
+        ToggleRow(
+            title = "Hide engagement counts",
+            subtitle = "Don't show reply, boost and favourite counts on posts.",
+            checked = loaded.hideEngagementCounts,
+            label = "Hide engagement counts toggle",
+            onCheckedChange = { value -> apply { it.copy(hideEngagementCounts = value) } },
+        )
+        ToggleRow(
+            title = "Confirm before boosting",
+            subtitle = "Ask before sharing a post with your followers.",
+            checked = loaded.confirmBeforeBoost,
+            label = "Confirm before boosting toggle",
+            onCheckedChange = { value -> apply { it.copy(confirmBeforeBoost = value) } },
+        )
+        ToggleRow(
+            title = "Confirm before following",
+            subtitle = "Ask before sending a follow request.",
+            checked = loaded.confirmBeforeFollow,
+            label = "Confirm before following toggle",
+            onCheckedChange = { value -> apply { it.copy(confirmBeforeFollow = value) } },
+        )
+        ToggleRow(
+            title = "Hide media previews",
+            subtitle = "Don't show images and videos in timelines. Media stays visible in threads.",
+            checked = loaded.hideMediaPreviews,
+            label = "Hide media previews toggle",
+            onCheckedChange = { value -> apply { it.copy(hideMediaPreviews = value) } },
+        )
+        ToggleRow(
+            title = "Hide posts without alt text",
+            subtitle = "Only show timeline posts whose media have descriptions.",
+            checked = loaded.hideNoAltPosts,
+            label = "Hide posts without alt text toggle",
+            onCheckedChange = { value -> apply { it.copy(hideNoAltPosts = value) } },
+        )
+        ToggleRow(
+            title = "Reduce motion",
+            subtitle = "Tone down animations like the back-to-top pill.",
+            checked = loaded.reduceMotion,
+            label = "Reduce motion toggle",
+            onCheckedChange = { value -> apply { it.copy(reduceMotion = value) } },
+        )
+        SettingsNavigationRow(
+            title = "Filters",
+            subtitle = "Hide or blur posts matching keywords you choose.",
+            icon = Icons.Outlined.FilterList,
+            description = "Manage your filters",
+            onClick = onOpenFilters,
+        )
+        SettingsNavigationRow(
+            title = "Muted accounts",
+            subtitle = "Accounts you have muted, with unmute shortcuts.",
+            icon = Icons.Outlined.Block,
+            description = "Manage your muted accounts",
+            onClick = onOpenMutes,
+        )
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable(onClick = onOpenMutes)
-                .semantics { contentDescription = "Manage your muted accounts" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Muted accounts", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Accounts you have muted, with unmute shortcuts.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable(onClick = onOpenScheduled)
-                .semantics { contentDescription = "Open your scheduled posts" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Scheduled posts", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Posts waiting to publish at their scheduled time.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable(onClick = onOpenLists)
-                .semantics { contentDescription = "Manage your lists" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Lists", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Create lists of accounts and follow their timelines.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        SettingsSectionHeader("Composer")
+        VisibilityRow(
+            current = loaded.defaultVisibility,
+            onSelect = { visibility -> apply { it.copy(defaultVisibility = visibility) } },
+        )
+        ToggleRow(
+            title = "Require alt text",
+            subtitle = "Ask for confirmation before posting media without descriptions.",
+            checked = loaded.requireAltText,
+            label = "Require alt text toggle",
+            onCheckedChange = { value -> apply { it.copy(requireAltText = value) } },
+        )
+        SettingsNavigationRow(
+            title = "Scheduled posts",
+            subtitle = "Posts waiting to publish at their scheduled time.",
+            icon = Icons.Outlined.Schedule,
+            description = "Open your scheduled posts",
+            onClick = onOpenScheduled,
+        )
 
         if (session.scopes?.split(Regex("\\s+"))?.contains("admin") == true) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 48.dp)
-                    .clickable(onClick = onOpenModeration)
-                    .semantics { contentDescription = "Open moderation tools" }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(text = "Moderation", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        text = "Approve signups, handle reports, suspend accounts, manage domain blocks.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            SettingsSectionHeader("Administration")
+            SettingsNavigationRow(
+                title = "Moderation",
+                subtitle = "Approve signups, handle reports, suspend accounts, manage domain blocks.",
+                icon = Icons.Outlined.AdminPanelSettings,
+                description = "Open moderation tools",
+                onClick = onOpenModeration,
+            )
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable(onClick = onOpenDms)
-                .semantics { contentDescription = "Open your direct messages" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Direct messages", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Conversations from direct and mentioned posts.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable {
-                    transferMessage = null
-                    exportLauncher.launch("sidewinder-settings.json")
-                }
-                .semantics { contentDescription = "Export settings to a file" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Export settings", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Save your preferences to a file.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 48.dp)
-                .clickable {
-                    transferMessage = null
-                    importLauncher.launch(arrayOf("application/json"))
-                }
-                .semantics { contentDescription = "Import settings from a file" }
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(text = "Import settings", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = "Restore preferences from an exported file.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        SettingsSectionHeader("Backup and restore")
+        SettingsActionRow(
+            title = "Export settings",
+            subtitle = "Save your preferences to a file.",
+            icon = Icons.Outlined.Download,
+            description = "Export settings to a file",
+            onClick = {
+                transferMessage = null
+                exportLauncher.launch("sidewinder-settings.json")
+            },
+        )
+        SettingsActionRow(
+            title = "Import settings",
+            subtitle = "Restore preferences from an exported file.",
+            icon = Icons.Outlined.Upload,
+            description = "Import settings from a file",
+            onClick = {
+                transferMessage = null
+                importLauncher.launch(arrayOf("application/json"))
+            },
+        )
 
         transferMessage?.let {
             Text(
@@ -756,6 +679,79 @@ internal fun ToggleRow(
     }
 }
 
+/** Navigation destination with one merged, 48dp-minimum click target. */
+@Composable
+private fun SettingsNavigationRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp),
+        ) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** File-transfer action, visually distinct from destination rows. */
+@Composable
+private fun SettingsActionRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
+            .semantics(mergeDescendants = true) { contentDescription = description },
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Icon(imageVector = icon, contentDescription = null)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /** Error-colored sign-out entry point for the active account. */
 @Composable
 private fun SignOutRow(
@@ -780,12 +776,12 @@ private fun SignOutRow(
     }
 }
 
-/** Section heading matching the Appearance section's title style. */
+/** Section label kept below the screen title in the visual hierarchy. */
 @Composable
 internal fun SettingsSectionHeader(title: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.headlineSmall,
+        style = MaterialTheme.typography.titleMedium,
         modifier = Modifier
             .padding(top = 16.dp, bottom = 8.dp)
             .semantics { heading() },

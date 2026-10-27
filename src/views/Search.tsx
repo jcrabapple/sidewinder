@@ -13,6 +13,7 @@ import { navigate, useTitle } from '../router'
 import { settings } from '../state/settings'
 import { searchSeenPosts, type SeenPost } from '../state/seenPosts'
 import { formatRelative, formatAbsolute } from '../util/time'
+import { statusRowMatches } from '../util/statusRows'
 import './Search.css'
 
 type Tab = 'statuses' | 'accounts' | 'hashtags' | 'seen'
@@ -29,6 +30,17 @@ export function SearchView() {
   const [state, setState] = useState<LoadState>('idle')
   const [error, setError] = useState<string | null>(null)
   const requestSeq = useRef(0)
+  const seenSeq = useRef(0)
+
+  function updateQuery(value: string) {
+    if (!value.trim()) {
+      // Invalidate immediately, before an in-flight response can repaint the
+      // query that was just erased. Local Seen searches need the same guard.
+      ++requestSeq.current
+      ++seenSeq.current
+    }
+    setQuery(value)
+  }
 
   // Debounce typing into a submitted query.
   useEffect(() => {
@@ -36,6 +48,9 @@ export function SearchView() {
     if (!q) {
       setSubmitted('')
       setResults(null)
+      setSeen(null)
+      setSeenBusy(false)
+      setError(null)
       setState('idle')
       return
     }
@@ -86,7 +101,6 @@ export function SearchView() {
   }, [submitted, retrySeq])
 
   // The Seen tab searches the local cache lazily: only when activated.
-  const seenSeq = useRef(0)
   useEffect(() => {
     if (tab !== 'seen' || !submitted || !settings.value.seenHistory) return
     const seq = ++seenSeq.current
@@ -121,10 +135,10 @@ export function SearchView() {
           value={query}
           placeholder="Search posts, people, hashtags, or paste a URL"
           aria-label="Search"
-          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onInput={(e) => updateQuery((e.target as HTMLInputElement).value)}
         />
         {query && (
-          <button class="icon-btn search__clear" aria-label="Clear search" onClick={() => setQuery('')}>
+          <button class="icon-btn search__clear" aria-label="Clear search" onClick={() => updateQuery('')}>
             <Icon name="x" size={16} />
           </button>
         )}
@@ -187,7 +201,7 @@ export function SearchView() {
                   }
                   onStatusDeleted={(id) =>
                     setResults((cur) =>
-                      cur ? { ...cur, statuses: cur.statuses.filter((it) => it.id !== id) } : cur,
+                      cur ? { ...cur, statuses: cur.statuses.filter((it) => !statusRowMatches(it, id)) } : cur,
                     )
                   }
                 />

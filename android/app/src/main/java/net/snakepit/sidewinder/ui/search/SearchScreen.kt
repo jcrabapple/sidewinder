@@ -69,6 +69,7 @@ import net.snakepit.sidewinder.core.search.SearchRepository
 import net.snakepit.sidewinder.core.search.recentUses
 import net.snakepit.sidewinder.ui.app.LocalAppActions
 import net.snakepit.sidewinder.ui.timeline.StatusCard
+import net.snakepit.sidewinder.ui.timeline.TimelineStore
 import net.snakepit.sidewinder.ui.trends.TrendsColumn
 
 /**
@@ -106,6 +107,7 @@ fun SearchScreen(
     onOpenThread: (String) -> Unit,
     onOpenProfile: (String) -> Unit,
     onOpenTag: (String) -> Unit,
+    onCompose: (String?) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -134,6 +136,7 @@ fun SearchScreen(
     fun updateStatus(updated: Status) {
         val current = statusResults ?: return
         statusResults = current.copy(items = current.items.map { if (it.id == updated.id) updated else it })
+        TimelineStore.applyEdit(updated.reblog ?: updated)
     }
 
     /**
@@ -149,6 +152,7 @@ fun SearchScreen(
             "statuses" -> scope.launch {
                 statusState = SearchState.Loading
                 statusResults = null
+                listState.scrollToItem(0)
                 try {
                     val results = SearchRepository.search(api, q, type = "statuses")
                     if (!isCurrent()) return@launch
@@ -310,7 +314,11 @@ fun SearchScreen(
                     }
                 },
                 label = { Text("Search") },
-                supportingText = { Text("Type at least 2 characters") },
+                supportingText = if (query.trim().length < MIN_QUERY_LENGTH) {
+                    { Text("Type at least 2 characters") }
+                } else {
+                    null
+                },
             )
 
             PrimaryTabRow(selectedTabIndex = tab) {
@@ -339,6 +347,7 @@ fun SearchScreen(
                     onStatusUpdated = ::updateStatus,
                     onNotice = ::showNotice,
                     onOpenThread = onOpenThread,
+                    onCompose = onCompose,
                     onRetry = retry,
                 )
                 1 -> AccountsTab(
@@ -378,6 +387,7 @@ private fun StatusesTab(
     onStatusUpdated: (Status) -> Unit,
     onNotice: (String) -> Unit,
     onOpenThread: (String) -> Unit,
+    onCompose: (String?) -> Unit,
     onRetry: () -> Unit,
 ) {
     when (state) {
@@ -396,9 +406,7 @@ private fun StatusesTab(
                         onStatusUpdated = onStatusUpdated,
                         onNotice = onNotice,
                         onOpenThread = onOpenThread,
-                        // The composer is not wired from search; the card's
-                        // reply icon surfaces a notice instead.
-                        onCompose = { onNotice("Replying is not available from search. Open the post and reply there.") },
+                        onCompose = onCompose,
                     )
                     if (index < items.lastIndex) HorizontalDivider()
                 }

@@ -7,6 +7,7 @@ import net.snakepit.sidewinder.core.model.Account
 import net.snakepit.sidewinder.core.model.Status
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class StreamTest {
@@ -104,5 +105,15 @@ class StreamTest {
     fun `negative attempt treated as zero`() {
         assertEquals(1000L, StreamBackoff.delayMs(-1))
         assertEquals(1000L, StreamBackoff.delayMs(-100))
+    }
+
+    @Test
+    fun `streaming clients share network resources and keep sockets alive`() {
+        val first = streamingHttpClient()
+        val second = streamingHttpClient()
+        assertSame(first.dispatcher, second.dispatcher)
+        assertSame(first.connectionPool, second.connectionPool)
+        assertEquals(30_000, first.pingIntervalMillis)
+        assertEquals(0, first.readTimeoutMillis)
     }
 }

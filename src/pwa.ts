@@ -18,7 +18,10 @@ export function registerPwa() {
           if (!worker) return
           worker.addEventListener('statechange', () => {
             if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-              toast('A new version is ready. Reload to update.')
+              toast('A new version is ready.', 'info', {
+                label: 'Reload',
+                onClick: () => window.location.reload(),
+              })
             }
           })
         })

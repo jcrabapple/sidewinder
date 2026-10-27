@@ -1,5 +1,6 @@
 package net.snakepit.sidewinder.core.settings
 
+import kotlinx.serialization.SerializationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -40,5 +41,15 @@ class SettingsMigrationTest {
         val (mode, pureBlack) = migrateTheme("GARBAGE", true)
         assertEquals(ThemePref.SYSTEM, mode)
         assertTrue(pureBlack)
+    }
+
+    @Test
+    fun `missing settings file decodes as defaults`() {
+        assertEquals(AppSettings(), decodeSettings(null))
+    }
+
+    @Test(expected = SerializationException::class)
+    fun `corrupt settings file throws`() {
+        decodeSettings("{not valid json")
     }
 }

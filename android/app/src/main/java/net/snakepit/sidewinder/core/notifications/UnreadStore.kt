@@ -26,7 +26,9 @@ import java.io.File
  * Server-marker sync (web `state/markers.ts`) is not ported yet: the mark
  * is local to this device, stored in `filesDir/sidewinder/unread-state.json`.
  */
-class UnreadStore(context: Context) {
+class UnreadStore internal constructor(private val file: File) {
+
+    constructor(context: Context) : this(File(context.filesDir, "sidewinder/unread-state.json"))
 
     @Serializable
     private data class Stored(
@@ -35,8 +37,6 @@ class UnreadStore(context: Context) {
     )
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val file: File = File(context.filesDir, "sidewinder/unread-state.json")
-
     private fun read(): Stored =
         if (!file.exists()) Stored()
         else runCatching { json.decodeFromString(Stored.serializer(), file.readText()) }.getOrDefault(Stored())
@@ -56,7 +56,18 @@ class UnreadStore(context: Context) {
     suspend fun setSeenTop(sessionId: String, id: String) {
         withStore {
             val stored = read()
-            write(stored.copy(seenTop = stored.seenTop + (sessionId to id)))
+            val previous = stored.seenTop[sessionId]
+            if (previous == null || id >= previous) {
+                // Seeing the newest row clears both the visible badge and
+                // its persisted value. An older load cannot move the mark
+                // backwards or resurrect those rows later.
+                write(
+                    stored.copy(
+                        seenTop = stored.seenTop + (sessionId to id),
+                        counts = stored.counts + (sessionId to 0),
+                    ),
+                )
+            }
         }
     }
 
@@ -67,6 +78,14 @@ class UnreadStore(context: Context) {
             val stored = read()
             write(stored.copy(counts = stored.counts + (sessionId to count)))
         }
+    }
+
+    /** Atomically increments a streamed-notification badge and returns its new value. */
+    suspend fun increment(sessionId: String): Int = withStore {
+        val stored = read()
+        val next = ((stored.counts[sessionId] ?: 0) + 1).coerceAtMost(WINDOW)
+        write(stored.copy(counts = stored.counts + (sessionId to next)))
+        next
     }
 
     companion object {

@@ -136,11 +136,13 @@ object FilterCache {
     internal fun isFresh(entry: Entry, now: Long): Boolean = now - entry.fetchedAtMs < TTL_MS
 
     private val mutex = Mutex()
+    private val stateLock = Any()
+    private val generations = mutableMapOf<String, Long>()
 
     /**
      * Internal so tests can seed entries: peek() reads this map directly.
-     * Concurrent access is safe (ConcurrentHashMap); racing a refresh only
-     * costs one extra re-fetch and never corrupts an entry.
+     * Concurrent access is safe (ConcurrentHashMap); cache commits are also
+     * guarded by [stateLock] so invalidation cannot race a generation check.
      */
     internal val cache = java.util.concurrent.ConcurrentHashMap<String, Entry>()
 
@@ -149,25 +151,42 @@ object FilterCache {
      * 60 seconds, or when [force] is set. Concurrent callers share one
      * refresh.
      */
-    suspend fun current(api: Api, token: String, force: Boolean = false): List<FilterV2> {
+    suspend fun current(api: Api, token: String, force: Boolean = false): List<FilterV2> =
+        current(token, force, System.currentTimeMillis()) { FiltersRepository.list(api, token) }
+
+    internal suspend fun current(
+        token: String,
+        force: Boolean,
+        now: Long,
+        fetch: suspend () -> List<FilterV2>,
+    ): List<FilterV2> {
         mutex.withLock {
-            val now = System.currentTimeMillis()
-            val entry = cache[token]
+            val (entry, generation) = synchronized(stateLock) {
+                (cache[token]) to (generations[token] ?: 0L)
+            }
             if (!force && entry != null && isFresh(entry, now)) {
                 return entry.filters
             }
             val fresh = try {
-                FiltersRepository.list(api, token)
+                fetch()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Negative cache: keep the last known filters (none if never
                 // fetched) and retry after RETRY_AFTER_FAILURE_MS, so one outage
                 // does not make every card re-fetch serially behind the mutex.
-                cache[token] = failureEntry(entry, now)
+                synchronized(stateLock) {
+                    if ((generations[token] ?: 0L) == generation) {
+                        cache[token] = failureEntry(entry, now)
+                    }
+                }
                 throw e
             }
-            cache[token] = Entry(fresh, now)
+            synchronized(stateLock) {
+                if ((generations[token] ?: 0L) == generation) {
+                    cache[token] = Entry(fresh, now)
+                }
+            }
             return fresh
         }
     }
@@ -179,10 +198,11 @@ object FilterCache {
      */
     fun peek(token: String): List<FilterV2>? = cache[token]?.filters
 
-    /** Drop the cached filters for [token]; called after every mutation. */
+    /** Drop cached filters and reject refreshes started before this invalidation. */
     fun invalidate(token: String) {
-        // No mutex needed: racing a concurrent refresh only costs one
-        // extra re-fetch and never corrupts the entry.
-        cache.remove(token)
+        synchronized(stateLock) {
+            generations[token] = (generations[token] ?: 0L) + 1L
+            cache.remove(token)
+        }
     }
 }

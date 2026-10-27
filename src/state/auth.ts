@@ -44,26 +44,23 @@ export const activeSession = computed<Session | null>(() => {
 /** Live Api instance bound to the active session's token. */
 export const api = computed<Api>(() => {
   const s = activeSession.value
-  const client = new Api(s?.base ?? defaultBase())
+  const client = new Api(s?.base ?? location.origin)
   client.token = s?.token ?? null
   return client
 })
-
-/** The default server suggested on the login screen (same origin policy as GTS). */
-export function defaultBase(): string {
-  return 'https://gts.example.org'
-}
 
 export function upsertSession(sess: Session) {
   const list = sessions.value.filter((s) => s.id !== sess.id)
   sessions.value = [...list, sess]
   activeId.value = sess.id
   persist(sessions.value)
+  reloadSessionState()
 }
 
 export function switchAccount(id: string) {
   activeId.value = id
   persist(sessions.value)
+  reloadSessionState()
   void closeStreams()
   void import('./relationships').then((m) => m.clearRelationships()).catch(() => {})
   void import('./hideBoosts').then((m) => m.resetHiddenBoosters()).catch(() => {})
@@ -73,6 +70,7 @@ export function removeSession(id: string) {
   sessions.value = sessions.value.filter((s) => s.id !== id)
   if (activeId.value === id) activeId.value = sessions.value[0]?.id ?? null
   persist(sessions.value)
+  reloadSessionState()
 }
 
 export function sessionIdFor(base: string, accountId: string): string {
@@ -95,6 +93,14 @@ export function logout(id?: string) {
   removeSession(target)
 }
 
+/** Refresh every account-owned cache after the active session changes.
+ * Dynamic imports avoid auth's API client becoming a module-cycle dependency. */
+function reloadSessionState(): void {
+  void import('./push').then((m) => m.reloadPushState()).catch(() => {})
+  void import('./mutes').then((m) => m.reloadKeywordMutes()).catch(() => {})
+  void import('./seenPosts').then((m) => m.resetSeenPosts()).catch(() => {})
+}
+
 /** Tear down live streams; dynamic import avoids the auth↔streaming cycle. */
 async function closeStreams() {
   try {
@@ -110,5 +116,6 @@ export function resetSessions() {
   sessions.value = []
   activeId.value = null
   persist([])
+  reloadSessionState()
   void closeStreams()
 }

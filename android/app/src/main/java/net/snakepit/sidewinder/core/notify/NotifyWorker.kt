@@ -19,16 +19,20 @@ import net.snakepit.sidewinder.MainActivity
 import net.snakepit.sidewinder.core.datastore.SessionStore
 import net.snakepit.sidewinder.core.model.Notification
 import net.snakepit.sidewinder.core.network.Api
+import net.snakepit.sidewinder.core.network.Page
+
+private class NotifyStateReadFailure(cause: Throwable) : Exception(cause)
 
 /**
  * Background poll for new notifications of the active session. Port of the
  * web client's polling in src/api/client.ts, as a WorkManager worker.
  *
- * Fetches `/api/v1/notifications?since_id=<lastNotifiedId>` (no since_id on
- * the very first run, which only records the newest id without notifying),
- * posts ONE summary notification when something is new, and stores the
- * newest seen id per session. Every failure is silent: the worker always
- * returns success and never crashes the app in the background.
+ * Fetches `/api/v1/notifications?since_id=<lastNotifiedId>`, following next
+ * links until the old watermark (up to ten pages). The very first run only
+ * records the newest id without notifying. Fresh pages produce ONE summary
+ * before the newest id is stored. Fetch/write failures leave the watermark
+ * untouched. Unreadable state is quarantined and retried; other failures
+ * return success so an already-posted summary is not duplicated.
  */
 class NotifyWorker(
     context: Context,
@@ -42,9 +46,13 @@ class NotifyWorker(
             // Worker cancelled (stopped/expired): re-arm so WorkManager
             // sees the cancellation instead of a silent success.
             throw e
+        } catch (_: NotifyStateReadFailure) {
+            // The bad file was quarantined when possible. Retry establishes
+            // a fresh baseline instead of disabling notifications forever.
+            return Result.retry()
         } catch (_: Exception) {
-            // Every failure is silent: the worker never crashes the app
-            // in the background.
+            // Network and post-write failures stay silent: retrying after a
+            // successful system notification could duplicate that summary.
         }
         return Result.success()
     }
@@ -52,26 +60,48 @@ class NotifyWorker(
     private suspend fun pollOnce(context: Context) {
         val session = SessionStore(context).active() ?: return
         val state = NotifyState(context)
-        val sinceId = state.lastNotifiedId(session.id)
-
+        val sinceId = try {
+            state.lastNotifiedId(session.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            try {
+                state.quarantineUnreadable()
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                // A later retry can recover a transient filesystem failure.
+            }
+            throw NotifyStateReadFailure(e)
+        }
         val api = Api(session.base, session.token)
-        val query = sinceId?.let { mapOf("since_id" to listOf(it)) } ?: emptyMap()
-        val page = api.page(
-            "/api/v1/notifications",
-            ListSerializer(Notification.serializer()),
-            query = query,
-        )
 
-        // Keep only rows strictly newer than the last delivered id; the
-        // server honours since_id, this guards against ordering quirks.
-        val fresh = page.items
-            .filter { sinceId == null || it.id > sinceId }
-            .distinctBy { it.id }
+        if (sinceId == null) {
+            // Baseline only the newest visible row. Following older pages on
+            // the first run would make the watermark needlessly expensive and
+            // must never produce a backlog notification.
+            val page = api.page(
+                "/api/v1/notifications",
+                ListSerializer(Notification.serializer()),
+            )
+            val newestId = page.items.maxOfOrNull { it.id } ?: return
+            state.setLastNotifiedId(session.id, newestId)
+            return
+        }
+
+        val query = mapOf("since_id" to listOf(sinceId))
+        val fresh = collectFreshNotifications(sinceId) { maxId ->
+            api.page(
+                "/api/v1/notifications",
+                ListSerializer(Notification.serializer()),
+                query = query,
+                maxId = maxId,
+            )
+        }
         if (fresh.isEmpty()) return
 
-        val newestId = fresh.maxOf { it.id }
-        if (sinceId != null) post(context, fresh)
-        state.setLastNotifiedId(session.id, newestId)
+        post(context, fresh)
+        state.setLastNotifiedId(session.id, fresh.maxOf { it.id })
     }
 
     /** One summary notification: single row text, or "N new notifications". */
@@ -146,4 +176,38 @@ class NotifyWorker(
         const val CHANNEL_ID = "notifications"
         const val TAG = "sidewinder-notify"
     }
+}
+
+internal const val NOTIFY_PAGE_LIMIT = 10
+
+/**
+ * Collects every row newer than [sinceId], following each page's Link cursor.
+ * A page containing the old watermark ends the walk even if the server sends
+ * another next link. Any fetch failure propagates before the caller notifies
+ * or advances state.
+ */
+internal suspend fun collectFreshNotifications(
+    sinceId: String,
+    fetchPage: suspend (maxId: String?) -> Page<Notification>,
+): List<Notification> {
+    val fresh = linkedMapOf<String, Notification>()
+    var maxId: String? = null
+
+    repeat(NOTIFY_PAGE_LIMIT) {
+        val page = fetchPage(maxId)
+        page.items.forEach { notification ->
+            if (notification.id > sinceId && notification.id !in fresh) {
+                fresh[notification.id] = notification
+            }
+        }
+
+        val nextMaxId = page.nextMaxId
+        val crossedWatermark = page.items.any { it.id <= sinceId } ||
+            (nextMaxId != null && nextMaxId <= sinceId)
+        if (crossedWatermark || nextMaxId == null || nextMaxId == maxId) {
+            return fresh.values.toList()
+        }
+        maxId = nextMaxId
+    }
+    return fresh.values.toList()
 }

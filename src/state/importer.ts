@@ -240,13 +240,14 @@ function parseStored(raw: string | null): Record<string, ImportJob[]> {
   return out
 }
 
-/** Trim one session's list: drop ended jobs older than 24 h, cap at MAX_JOBS_PER_SESSION, newest first. */
-function trimList(list: ImportJob[]): ImportJob[] {
-  const now = Date.now()
-  return list
+/** Trim one session's list: drop ended jobs older than 24 h and retain every running job before the newest ended jobs. */
+export function trimList(list: ImportJob[], now = Date.now()): ImportJob[] {
+  const sorted = list
     .filter((j) => j.phase !== 'ended' || now - j.startedAt < 24 * 60 * 60_000)
     .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, MAX_JOBS_PER_SESSION)
+  const running = sorted.filter((j) => j.phase !== 'ended')
+  const ended = sorted.filter((j) => j.phase === 'ended')
+  return [...running, ...ended.slice(0, Math.max(0, MAX_JOBS_PER_SESSION - running.length))]
 }
 
 function persistJobs(store: Record<string, ImportJob[]>): void {
@@ -274,7 +275,7 @@ function loadRawSafe(): string | null {
   }
 }
 
-/** The active session's jobs, newest first. Empty when signed out. */
+/** The active session's jobs: running work first, then newest ended jobs. Empty when signed out. */
 export const jobs: ReadonlySignal<ImportJob[]> = computed<ImportJob[]>(() => {
   const id = activeSession.value?.id
   if (!id) return []

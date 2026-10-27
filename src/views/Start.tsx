@@ -5,7 +5,7 @@
  */
 import { useState } from 'preact/hooks'
 import { getOrCreateClient, authorizeUrl, loginErrorMessage, exchangeCode } from '../api/oauth'
-import { defaultBase, upsertSession, sessionIdFor, fetchAccount, activeSession } from '../state/auth'
+import { upsertSession, sessionIdFor, fetchAccount, activeSession } from '../state/auth'
 import { Api } from '../api/client'
 import type { Instance } from '../api/types'
 import { navigate } from '../router'
@@ -26,7 +26,7 @@ export async function consumeOAuthReturn(): Promise<void> {
 }
 
 export function StartView() {
-  const [server, setServer] = useState(defaultBase())
+  const [server, setServer] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -74,7 +74,7 @@ export function StartView() {
               onInput={(e) => setServer((e.target as HTMLInputElement).value)}
               required
             />
-            <p class="help-text">Your GoToSocial or Mastodon server, e.g. gts.example.org</p>
+            <p class="help-text">Your GoToSocial or Mastodon server, for example social.example.com</p>
           </div>
 
           {error && (

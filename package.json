@@ -1,6 +1,7 @@
 {
   "name": "sidewinder",
   "private": true,
+  "license": "MIT",
   "version": "0.1.0",
   "description": "A web client for GoToSocial / Mastodon-compatible servers",
   "type": "module",
@@ -9,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "emojis": "node scripts/build-emoji-data.mjs",
-    "test:import": "node --experimental-strip-types --test scripts/test-import-csv.mjs scripts/test-import-watch.mjs"
+    "test:import": "node --experimental-strip-types --test scripts/test-import-csv.mjs scripts/test-import-watch.mjs",
+    "test": "node --experimental-strip-types --import ./scripts/register-typescript-loader.mjs --test scripts/test-*.mjs"
   },
   "dependencies": {
     "@preact/signals": "^2.11.2",

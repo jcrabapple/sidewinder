@@ -32,6 +32,7 @@ export function WrappedView() {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [year, setYear] = useState(new Date().getFullYear())
+  const [retrySequence, setRetrySequence] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -85,7 +86,7 @@ export function WrappedView() {
     return () => {
       alive = false
     }
-  }, [year])
+  }, [year, retrySequence])
 
   const stats = useMemo(() => (data ? computeStats(data) : null), [data])
 
@@ -143,7 +144,7 @@ export function WrappedView() {
         <div class="state-block" role="alert">
           <h2>Wrapped is unavailable</h2>
           <p>{error ?? 'Your data could not be loaded.'}</p>
-          <button class="btn" onClick={() => setYear((y) => y)}>Try again</button>
+          <button class="btn" onClick={() => setRetrySequence((seq) => seq + 1)}>Try again</button>
         </div>
       )}
 

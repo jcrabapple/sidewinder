@@ -37,6 +37,7 @@ export function MediaGrid({ media, sensitive, revealed }: MediaGridProps) {
   const viewable = items.filter((m) => m.type === 'image' || m.type === 'unknown')
 
   function openLightbox(m: MediaAttachment, btn: HTMLElement) {
+    if (blurred) return
     const idx = viewable.findIndex((v) => v.id === m.id)
     if (idx === -1) return
     lastTrigger.current = btn
@@ -56,7 +57,7 @@ export function MediaGrid({ media, sensitive, revealed }: MediaGridProps) {
           <span>Sensitive media — click to view</span>
         </button>
       )}
-      <div class="media-grid__tiles" aria-hidden={blurred || undefined} data-hidden={blurred || undefined}>
+      <div class="media-grid__tiles" inert={blurred} aria-hidden={blurred || undefined} data-hidden={blurred || undefined}>
         {items.map((m) => (
           <MediaTile
             key={m.id}
@@ -191,6 +192,8 @@ function Lightbox({
       class="lightbox"
       aria-label="Media viewer"
       onClick={(e) => {
+        // The dialog lives inside StatusCard's DOM tree even in the top layer.
+        e.stopPropagation()
         // The inner box covers the whole viewport, so treat clicks on it (outside
         // the image and controls) as clicks on the backdrop.
         const t = e.target as HTMLElement

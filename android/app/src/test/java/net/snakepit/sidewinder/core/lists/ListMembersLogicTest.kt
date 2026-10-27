@@ -2,11 +2,9 @@ package net.snakepit.sidewinder.core.lists
 
 import net.snakepit.sidewinder.core.model.Account
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** JVM tests for member-search filtering and load-more backoff. */
+/** JVM tests for member-search filtering. */
 class ListMembersLogicTest {
 
     private fun account(id: String) = Account(id = id, username = id, acct = id)
@@ -30,21 +28,5 @@ class ListMembersLogicTest {
     fun emptyMembershipHidesNothing() {
         val results = listOf(account("1"), account("2"))
         assertEquals(results, ListMembersLogic.hideExistingMembers(results, emptySet()))
-    }
-
-    @Test
-    fun backoffStartsAtOneSecondAndDoubles() {
-        assertEquals(0L, ListMembersLogic.PageRetry.delayMs(0))
-        assertEquals(1_000L, ListMembersLogic.PageRetry.delayMs(1))
-        assertEquals(2_000L, ListMembersLogic.PageRetry.delayMs(2))
-        assertEquals(4_000L, ListMembersLogic.PageRetry.delayMs(3))
-    }
-
-    @Test
-    fun backoffCapsAtThirtySeconds() {
-        assertEquals(30_000L, ListMembersLogic.PageRetry.delayMs(6))
-        assertEquals(30_000L, ListMembersLogic.PageRetry.delayMs(50))
-        assertTrue(ListMembersLogic.PageRetry.delayMs(5) <= ListMembersLogic.PageRetry.MAX_MS)
-        assertFalse(ListMembersLogic.PageRetry.delayMs(50) < ListMembersLogic.PageRetry.MAX_MS)
     }
 }

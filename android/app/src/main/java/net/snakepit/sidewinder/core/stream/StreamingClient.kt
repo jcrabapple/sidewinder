@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import net.snakepit.sidewinder.core.network.Api
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -12,6 +13,11 @@ import okhttp3.WebSocketListener
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.util.concurrent.TimeUnit
+
+internal fun streamingHttpClient(): OkHttpClient = Api.newClientBuilder()
+    .pingInterval(30, TimeUnit.SECONDS) // client pings; server auto-pongs per RFC 6455
+    .readTimeout(0, TimeUnit.MILLISECONDS) // server-streamed socket: no read timeout
+    .build()
 
 /**
  * OkHttp WebSocket client for the GTS `stream=user` endpoint. One
@@ -33,11 +39,7 @@ class StreamingClient(
 ) {
     private val root: HttpUrl = baseUrl.trimEnd('/').toHttpUrl()
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .pingInterval(30, TimeUnit.SECONDS) // client pings; server auto-pongs per RFC 6455
-        .readTimeout(0, TimeUnit.MILLISECONDS) // server-streamed socket: no read timeout
-        .build()
+    private val client: OkHttpClient = streamingHttpClient()
 
     private val lock = Any()
     private var socket: WebSocket? = null

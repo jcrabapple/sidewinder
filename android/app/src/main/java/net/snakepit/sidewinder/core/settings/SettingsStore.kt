@@ -8,6 +8,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 enum class ThemePref { SYSTEM, DARK, LIGHT, AMOLED }
 
@@ -66,6 +69,37 @@ internal fun migrateTheme(storedTheme: String, storedPureBlack: Boolean): Pair<T
         mode to storedPureBlack
     }
 
+private val settingsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+/** A null document represents a missing file; every present document must decode. */
+internal fun decodeSettings(contents: String?): AppSettings {
+    if (contents == null) return AppSettings()
+    val stored = settingsJson.decodeFromString(SettingsStore.Stored.serializer(), contents)
+    val (mode, pureBlack) = migrateTheme(stored.theme, stored.pureBlack)
+    return AppSettings(
+        theme = mode,
+        pureBlack = pureBlack,
+        relativeTimes = stored.relativeTimes,
+        defaultVisibility = stored.defaultVisibility,
+        requireAltText = stored.requireAltText,
+        backgroundNotifications = stored.backgroundNotifications,
+        hideEngagementCounts = stored.hideEngagementCounts,
+        confirmBeforeBoost = stored.confirmBeforeBoost,
+        confirmBeforeFollow = stored.confirmBeforeFollow,
+        hideMediaPreviews = stored.hideMediaPreviews,
+        hideNoAltPosts = stored.hideNoAltPosts,
+        collapseLongPosts = stored.collapseLongPosts,
+        dynamicColor = stored.dynamicColor,
+        textScale = stored.textScale,
+        reduceMotion = stored.reduceMotion,
+        liveStreaming = stored.liveStreaming,
+        themeId = stored.themeId,
+        showBoosts = stored.showBoosts,
+        showReplies = stored.showReplies,
+        hideSelfBoosts = stored.hideSelfBoosts,
+    )
+}
+
 /**
  * JSON-file settings store at `filesDir/sidewinder/settings.json`, same
  * atomic temp+rename pattern as SessionStore. All access is suspend;
@@ -97,41 +131,16 @@ class SettingsStore(context: Context) {
         val hideSelfBoosts: Boolean = false,
     )
 
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val file: File =
         File(context.filesDir, "sidewinder/settings.json")
 
-    /** Serializes read-modify-write cycles in [update]. */
-    private val mutex = Mutex()
+    /** Serializes read-modify-write cycles across every store instance. */
+    private companion object {
+        val mutex = Mutex()
+    }
 
     suspend fun settings(): AppSettings = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext AppSettings()
-        runCatching {
-            val stored = json.decodeFromString(Stored.serializer(), file.readText())
-            val (mode, pureBlack) = migrateTheme(stored.theme, stored.pureBlack)
-            AppSettings(
-                theme = mode,
-                pureBlack = pureBlack,
-                relativeTimes = stored.relativeTimes,
-                defaultVisibility = stored.defaultVisibility,
-                requireAltText = stored.requireAltText,
-                backgroundNotifications = stored.backgroundNotifications,
-                hideEngagementCounts = stored.hideEngagementCounts,
-                confirmBeforeBoost = stored.confirmBeforeBoost,
-                confirmBeforeFollow = stored.confirmBeforeFollow,
-                hideMediaPreviews = stored.hideMediaPreviews,
-                hideNoAltPosts = stored.hideNoAltPosts,
-                collapseLongPosts = stored.collapseLongPosts,
-                dynamicColor = stored.dynamicColor,
-                textScale = stored.textScale,
-                reduceMotion = stored.reduceMotion,
-                liveStreaming = stored.liveStreaming,
-                themeId = stored.themeId,
-                showBoosts = stored.showBoosts,
-                showReplies = stored.showReplies,
-                hideSelfBoosts = stored.hideSelfBoosts,
-            )
-        }.getOrDefault(AppSettings())
+        decodeSettings(if (file.exists()) file.readText() else null)
     }
 
     /** Applies [transform] atomically and returns the new settings. */
@@ -141,7 +150,7 @@ class SettingsStore(context: Context) {
             file.parentFile?.mkdirs()
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(
-                json.encodeToString(
+                settingsJson.encodeToString(
                     Stored.serializer(),
                     Stored(
                         theme = next.theme.name,
@@ -167,9 +176,12 @@ class SettingsStore(context: Context) {
                     ),
                 ),
             )
-            if (!tmp.renameTo(file)) {
-                file.writeText(tmp.readText())
-                tmp.delete()
+            try {
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Never delete the last good settings before a replacement
+                // is known to have succeeded.
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             next
         }

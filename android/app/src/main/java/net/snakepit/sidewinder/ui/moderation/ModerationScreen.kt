@@ -359,8 +359,11 @@ private fun ReportsTab(api: Api) {
     var moreError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    var failedPagePosition by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     suspend fun load(showResolved: Boolean) {
+        moreError = false
+        failedPagePosition = null
         state = LoadState.Loading
         state = try {
             val page = ModerationRepository.fetchReports(api, showResolved)
@@ -387,10 +390,12 @@ private fun ReportsTab(api: Api) {
                 val base = (state as? LoadState.Content<AdminReport>)?.items ?: current.items
                 val seen = base.mapTo(HashSet()) { it.id }
                 state = LoadState.Content(base + page.items.filterNot { it.id in seen }, page.nextMaxId)
+                failedPagePosition = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Keep the list; the footer offers an explicit retry.
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
                 moreError = true
             } finally {
                 loadingMore = false
@@ -411,14 +416,19 @@ private fun ReportsTab(api: Api) {
     LaunchedEffect(api, resolved) { load(resolved) }
 
     // Infinite scroll one page ahead of the end, guarded against double-fetch
-    // by replacing the cursor only after the page lands.
+    // by replacing the cursor only after the page lands. Only scroll position
+    // and paging flags drive re-evaluation: a failed page needs a real scroll
+    // (position change) or the footer's explicit Retry before another request.
     LaunchedEffect(listState) {
         snapshotFlow {
+            val position = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? LoadState.Content<AdminReport> ?: return@collect
-            if (current.nextMaxId == null) return@collect
+            val paging = (state as? LoadState.Content<AdminReport>)?.let { loadingMore to moreError }
+            Triple(position, lastVisible, paging)
+        }.collect { (position, lastVisible, _) ->
+            val current = state as? LoadState.Content<AdminReport> ?: return@collect
+            if (current.nextMaxId == null || loadingMore) return@collect
+            if (moreError && position == failedPagePosition) return@collect
             if (lastVisible >= current.items.size - 3) loadMore()
         }
     }
@@ -677,8 +687,11 @@ private fun AccountsTab(api: Api) {
     var moreError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    var failedPagePosition by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     suspend fun run(q: String, m: String) {
+        moreError = false
+        failedPagePosition = null
         state = LoadState.Loading
         state = try {
             val page = ModerationRepository.searchAdminAccounts(
@@ -717,10 +730,12 @@ private fun AccountsTab(api: Api) {
                 val base = (state as? LoadState.Content<AdminAccount>)?.items ?: current.items
                 val seen = base.mapTo(HashSet()) { it.id }
                 state = LoadState.Content(base + page.items.filterNot { it.id in seen }, page.nextMaxId)
+                failedPagePosition = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Keep the list; the footer offers an explicit retry.
+                failedPagePosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
                 moreError = true
             } finally {
                 loadingMore = false
@@ -738,13 +753,19 @@ private fun AccountsTab(api: Api) {
 
     LaunchedEffect(api, searchId) { run(query, mode) }
 
+    // Only scroll position and paging flags drive re-evaluation, so a failed
+    // page needs a real scroll (position change) or the footer's explicit
+    // Retry before another request.
     LaunchedEffect(listState) {
         snapshotFlow {
+            val position = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
             val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            lastVisible to state
-        }.collect { (lastVisible, snapshot) ->
-            val current = snapshot as? LoadState.Content<AdminAccount> ?: return@collect
-            if (current.nextMaxId == null) return@collect
+            val paging = (state as? LoadState.Content<AdminAccount>)?.let { loadingMore to moreError }
+            Triple(position, lastVisible, paging)
+        }.collect { (position, lastVisible, _) ->
+            val current = state as? LoadState.Content<AdminAccount> ?: return@collect
+            if (current.nextMaxId == null || loadingMore) return@collect
+            if (moreError && position == failedPagePosition) return@collect
             if (lastVisible >= current.items.size - 3) loadMore()
         }
     }

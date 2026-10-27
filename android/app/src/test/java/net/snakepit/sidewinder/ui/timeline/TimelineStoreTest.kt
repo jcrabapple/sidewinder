@@ -99,8 +99,54 @@ class TimelineStoreTest {
         TimelineStore.applyPosted("s1", status("new"))
         val state = home.state as TimelineState.Content
         assertEquals(listOf("new"), state.items.map { it.id })
-        assertEquals(null, state.nextMaxId)
+        assertEquals("new", state.nextMaxId)
         assertEquals(false, state.loadingMore)
+    }
+
+    @Test
+    fun streamedStatusTurnsAnEmptyHomeFeedIntoContent() {
+        val home = TimelineStore.holder("s1", TimelineSource.Home).also {
+            it.state = TimelineState.Empty
+        }
+
+        TimelineStore.applyStreamed("s1", status("new"))
+
+        val state = home.state as TimelineState.Content
+        assertEquals(listOf("new"), state.items.map { it.id })
+        assertEquals("new", state.nextMaxId)
+        assertEquals(false, state.loadingMore)
+        assertEquals(0, home.pendingNewPosts)
+    }
+
+    @Test
+    fun streamedPostsCountEveryPrependUntilTheUiMarksItSeen() {
+        val home = load("s1", TimelineSource.Home, listOf(status("p1")))
+
+        TimelineStore.applyStreamed("s1", status("top"))
+        assertEquals(1, home.pendingNewPosts)
+
+        // TimelineScreen clears the pill immediately when that prepend is
+        // already visible at the top.
+        home.pendingNewPosts = 0
+        home.firstVisibleOffset = 1
+        TimelineStore.applyStreamed("s1", status("offset"))
+        assertEquals(1, home.pendingNewPosts)
+
+        home.firstVisibleIndex = 4
+        home.firstVisibleOffset = 0
+        TimelineStore.applyStreamed("s1", status("away"))
+        assertEquals(2, home.pendingNewPosts)
+        assertEquals(5, home.firstVisibleIndex)
+        assertEquals(listOf("away", "offset", "top", "p1"), items(home).map { it.id })
+
+        TimelineStore.applyStreamed("s1", status("away"))
+        assertEquals(2, home.pendingNewPosts)
+        assertEquals(5, home.firstVisibleIndex)
+
+        home.firstVisibleIndex = 0
+        home.pendingNewPosts = 0
+        TimelineStore.applyStreamed("s1", status("back-at-top"))
+        assertEquals(1, home.pendingNewPosts)
     }
 
     @Test

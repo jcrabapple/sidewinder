@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="sidewinder/sessions.json" />
+        <exclude domain="file" path="sidewinder/clients.json" />
+        <exclude domain="file" path="sidewinder/pending-login.json" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="sidewinder/sessions.json" />
+        <exclude domain="file" path="sidewinder/clients.json" />
+        <exclude domain="file" path="sidewinder/pending-login.json" />
+    </device-transfer>
+</data-extraction-rules>

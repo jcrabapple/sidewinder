@@ -24,7 +24,8 @@ class QuoteComposeTest {
 
     @Test
     fun `the RE line costs url weight plus RE and the blank line`() {
-        assertEquals(25 + 4 + 2, QUOTE_OVERHEAD)
+        // "Comment" (7) + blank line (2) + "RE: " (4) + URL_WEIGHT.
+        assertEquals(7 + 2 + 4 + URL_WEIGHT, weightedLength(quotePostText("Comment \n", "https://example.com/@a/1")))
     }
 
     @Test

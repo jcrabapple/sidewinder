@@ -6,6 +6,7 @@ import { signal } from '@preact/signals'
 import { api, activeSession } from './auth'
 import { getSeenTop, raiseSeenTop, setSeenTop, isNewer, isValidStatusId } from './readState'
 import { queueMarkerPush, syncMarkersFromServer } from './markers'
+import { filterSignupNotifications } from './signupNotifications'
 import type { Account, Notification } from '../api/types'
 
 /** Unread notifications, shown as the sidebar Notifications badge. Counted
@@ -20,6 +21,21 @@ export const COUNT_WINDOW = 40
  * mark yet gets its baseline set to the newest notification, so a fresh
  * device starts at zero instead of showing the whole history as unread.
  */
+export function reconcileUnreadNotifications(
+  sessionId: string,
+  rawItems: Notification[],
+  visibleItems: Notification[],
+): number {
+  const mark = getSeenTop(sessionId, 'notifications')
+  if (!mark) {
+    // The baseline must come from the raw page: if its newest row is a handled
+    // signup, using the filtered list would leave that raw row forever unread.
+    if (rawItems.length > 0) setSeenTop(sessionId, 'notifications', rawItems[0].id)
+    return 0
+  }
+  return visibleItems.filter((n) => isNewer(n.id, mark)).length
+}
+
 export async function refreshUnreadNotificationCount(): Promise<void> {
   const session = activeSession.value?.id ?? ''
   if (!session) return
@@ -30,13 +46,10 @@ export async function refreshUnreadNotificationCount(): Promise<void> {
       query: { limit: COUNT_WINDOW },
     })
     if ((activeSession.value?.id ?? '') !== session) return // account switched mid-flight
-    const mark = getSeenTop(session, 'notifications')
-    if (!mark) {
-      if (page.items.length > 0) setSeenTop(session, 'notifications', page.items[0].id)
-      unreadNotificationCount.value = 0
-      return
-    }
-    unreadNotificationCount.value = page.items.filter((n) => isNewer(n.id, mark)).length
+    const filtered = await filterSignupNotifications(page.items)
+    if (!filtered || (activeSession.value?.id ?? '') !== session) return
+    // Lookup failures keep their rows visible, and therefore in this count.
+    unreadNotificationCount.value = reconcileUnreadNotifications(session, page.items, filtered.items)
   } catch {
     // Keep the last known count; a failed recount should not invent one.
   }

@@ -41,6 +41,7 @@ import './Moderation.css'
 
 type LoadState = 'loading' | 'error' | 'ready'
 type Tab = 'signups' | 'reports' | 'accounts' | 'domains'
+type AccountMode = 'all' | 'local' | 'remote' | 'suspended'
 
 export function ModerationView() {
   useTitle('Moderation')
@@ -217,8 +218,12 @@ function SignupActions({ account, onDone }: { account: AdminAccount; onDone: (id
     setError(null)
     try {
       if (decision === 'approve') {
-        await approveSignup(account)
-        toast(`@${account.account.acct} approved — they can sign in now`)
+        const result = await approveSignup(account)
+        if (result.status === 'confirmed') {
+          toast(`@${account.account.acct} approved — they can sign in now`)
+        } else {
+          toast(result.warning, 'error')
+        }
       } else {
         await denySignup(account.id)
         toast(`@${account.account.acct}'s signup denied`)
@@ -485,15 +490,22 @@ function ReportRow({
 
 function AccountsTab() {
   const [query, setQuery] = useState('')
-  const [imap, setImap] = useState<'all' | 'local' | 'remote' | 'suspended'>('all')
+  const [imap, setImap] = useState<AccountMode>('all')
   const [items, setItems] = useState<AdminAccount[]>([])
   const [state, setState] = useState<LoadState | 'idle'>('idle')
   const [error, setError] = useState<string | null>(null)
   const [nextMaxId, setNextMaxId] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const requestSeq = useRef(0)
+  const criteria = useRef<{ query: string; mode: AccountMode }>({ query: '', mode: 'all' })
 
-  async function run(q: string, mode: string) {
+  async function run(q: string, mode: AccountMode) {
+    const seq = ++requestSeq.current
+    criteria.current = { query: q, mode }
     setState('loading')
     setError(null)
+    setLoadingMore(false)
+    setItems([])
     setNextMaxId(null)
     try {
       const page = await searchAdminAccounts({
@@ -501,12 +513,42 @@ function AccountsTab() {
         remote: mode === 'remote' ? true : undefined,
         suspended: mode === 'suspended' ? true : undefined,
       })
+      if (seq !== requestSeq.current) return
       setItems(page.items)
       setNextMaxId(page.nextMaxId)
       setState('ready')
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Account search failed.')
       setState('error')
+    }
+  }
+
+  async function loadMore() {
+    if (!nextMaxId || loadingMore) return
+    const seq = ++requestSeq.current
+    const cursor = nextMaxId
+    const { query: q, mode } = criteria.current
+    setLoadingMore(true)
+    setError(null)
+    try {
+      const page = await searchAdminAccounts({
+        username: q.trim() || undefined,
+        remote: mode === 'remote' ? true : undefined,
+        suspended: mode === 'suspended' ? true : undefined,
+        maxId: cursor,
+      })
+      if (seq !== requestSeq.current) return
+      setItems((cur) => {
+        const seen = new Set(cur.map((x) => x.id))
+        return [...cur, ...page.items.filter((x) => !seen.has(x.id))]
+      })
+      setNextMaxId(page.nextMaxId)
+    } catch (e) {
+      if (seq !== requestSeq.current) return
+      setError(e instanceof Error ? e.message : 'More accounts could not be loaded.')
+    } finally {
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 
@@ -532,7 +574,7 @@ function AccountsTab() {
           aria-label="Account scope"
           value={imap}
           onChange={(e) => {
-            const v = (e.target as HTMLSelectElement).value as typeof imap
+            const v = (e.target as HTMLSelectElement).value as AccountMode
             setImap(v)
             void run(query, v)
           }}
@@ -562,29 +604,18 @@ function AccountsTab() {
         </div>
       )}
       {state === 'ready' && items.length > 0 && (
-        <div class="moderation__list">
+        <div class="moderation__list" aria-busy={loadingMore}>
           {items.map((a) => (
             <AccountRow key={a.id} account={a} />
           ))}
+          {error && <p class="error-note" role="alert">{error}</p>}
           {nextMaxId && (
             <button
               class="btn moderation__more"
-              onClick={() => {
-                void searchAdminAccounts({
-                  username: query.trim() || undefined,
-                  remote: imap === 'remote' ? true : undefined,
-                  suspended: imap === 'suspended' ? true : undefined,
-                  maxId: nextMaxId,
-                }).then((page) => {
-                  setItems((cur) => {
-                    const seen = new Set(cur.map((x) => x.id))
-                    return [...cur, ...page.items.filter((x) => !seen.has(x.id))]
-                  })
-                  setNextMaxId(page.nextMaxId)
-                })
-              }}
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
             >
-              Load more
+              {loadingMore ? 'Loading…' : 'Load more accounts'}
             </button>
           )}
         </div>
@@ -672,17 +703,48 @@ function DomainsTab() {
   const [publicComment, setPublicComment] = useState('')
   const [obfuscate, setObfuscate] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [nextMaxId, setNextMaxId] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const requestSeq = useRef(0)
 
   async function load() {
+    const seq = ++requestSeq.current
     setState('loading')
     setError(null)
+    setLoadingMore(false)
+    setNextMaxId(null)
     try {
       const page = await fetchDomainBlocks()
+      if (seq !== requestSeq.current) return
       setItems(page.items)
+      setNextMaxId(page.nextMaxId)
       setState('ready')
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'Domain blocks could not be loaded.')
       setState('error')
+    }
+  }
+
+  async function loadMore() {
+    if (!nextMaxId || loadingMore) return
+    const seq = ++requestSeq.current
+    const cursor = nextMaxId
+    setLoadingMore(true)
+    setError(null)
+    try {
+      const page = await fetchDomainBlocks(cursor)
+      if (seq !== requestSeq.current) return
+      setItems((cur) => {
+        const seen = new Set(cur.map((block) => block.id))
+        return [...cur, ...page.items.filter((block) => !seen.has(block.id))]
+      })
+      setNextMaxId(page.nextMaxId)
+    } catch (e) {
+      if (seq !== requestSeq.current) return
+      setError(e instanceof Error ? e.message : 'More domain blocks could not be loaded.')
+    } finally {
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 
@@ -781,17 +843,24 @@ function DomainsTab() {
         </div>
       )}
       {state === 'ready' && items.length > 0 && (
-        <ul class="moderation__domains-list">
-          {items.map((b) => (
-            <li key={b.id} class="moderation__domains-row">
-              <span class="moderation__domains-name">{b.domain}</span>
-              {b.public_comment && <span class="moderation__domains-comment">{b.public_comment}</span>}
-              <button class="icon-btn" aria-label={`Unblock ${b.domain}`} title="Unblock" onClick={() => remove(b)}>
-                <Icon name="trash" size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul class="moderation__domains-list" aria-busy={loadingMore}>
+            {items.map((b) => (
+              <li key={b.id} class="moderation__domains-row">
+                <span class="moderation__domains-name">{b.domain}</span>
+                {b.public_comment && <span class="moderation__domains-comment">{b.public_comment}</span>}
+                <button class="icon-btn" aria-label={`Unblock ${b.domain}`} title="Unblock" onClick={() => remove(b)}>
+                  <Icon name="trash" size={16} />
+                </button>
+              </li>
+            ))}
+          </ul>
+          {nextMaxId && (
+            <button class="btn moderation__more" disabled={loadingMore} onClick={() => void loadMore()}>
+              {loadingMore ? 'Loading…' : 'Load more domain blocks'}
+            </button>
+          )}
+        </>
       )}
       {error && state !== 'error' && <p class="error-note" role="alert">{error}</p>}
     </div>

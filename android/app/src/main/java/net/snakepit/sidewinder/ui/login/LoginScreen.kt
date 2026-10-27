@@ -58,9 +58,6 @@ import androidx.compose.ui.res.painterResource
 import net.snakepit.sidewinder.core.oauth.savePendingLogin
 import net.snakepit.sidewinder.ui.theme.appSwitchColors
 
-/** The default server suggested on the sign-in screen. Same default as the web app. */
-private const val DEFAULT_BASE = "https://gts.example.org"
-
 /** Normalize user input into a server base: add scheme, strip trailing slash. */
 internal fun normalizeInstanceUrl(input: String): String? {
     val trimmed = input.trim()
@@ -156,7 +153,7 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var instanceInput by rememberSaveable { mutableStateOf(DEFAULT_BASE) }
+    var instanceInput by rememberSaveable { mutableStateOf("") }
     var phase by remember { mutableStateOf(LoginPhase.Idle) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var adminScopes by rememberSaveable { mutableStateOf(false) }
@@ -237,7 +234,7 @@ fun LoginScreen(onLoggedIn: () -> Unit, onCancel: (() -> Unit)?) {
                             "If nothing happens, return here and sign in again.",
                     )
                     LoginPhase.Error -> Text(errorMessage.orEmpty(), color = MaterialTheme.colorScheme.error)
-                    else -> Text("Example: $DEFAULT_BASE")
+                    else -> Text("Example: gts.example.org")
                 }
             },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),

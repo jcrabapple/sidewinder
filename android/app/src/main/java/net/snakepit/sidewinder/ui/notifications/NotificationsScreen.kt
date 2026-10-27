@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonOutline
@@ -25,18 +26,19 @@ import androidx.compose.material.icons.outlined.Poll
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,16 +56,23 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import net.snakepit.sidewinder.core.filters.FilterCache
+import net.snakepit.sidewinder.core.filters.FilterEngine
+import net.snakepit.sidewinder.core.filters.FilterHit
 import net.snakepit.sidewinder.core.model.Notification
 import net.snakepit.sidewinder.core.model.Session
+import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.notifications.NotificationsRepository
 import net.snakepit.sidewinder.core.stream.StreamEvent
 import net.snakepit.sidewinder.core.stream.StreamEventBus
 import net.snakepit.sidewinder.core.text.StatusText
+import net.snakepit.sidewinder.ui.timeline.StatusCardLogic
 import net.snakepit.sidewinder.ui.timeline.relativeTimestamp
 
 internal sealed interface NotificationsState {
@@ -81,6 +90,7 @@ internal sealed interface NotificationsState {
         val items: List<Notification>,
         val nextMaxId: String?,
         val loadingMore: Boolean,
+        val loadMoreError: String? = null,
     ) : NotificationsState
 }
 
@@ -221,6 +231,7 @@ internal object NotificationsStore {
  * Rows carrying a status open that status's thread; account-only rows
  * (follow, follow_request) are plain, non-clickable rows.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationsScreen(
     api: Api,
@@ -237,8 +248,11 @@ fun NotificationsScreen(
     // (or navigation away and back) restores the same list and place.
     val holder = remember(session.id, filter) { NotificationsStore.holder(session.id, filter) }
     var state by holder::state
+    var isRefreshing by remember(holder) { mutableStateOf(false) }
+    var refreshError by remember(holder) { mutableStateOf<String?>(null) }
+    var renderedCount by remember(holder) { mutableStateOf(0) }
+    var rawCount by remember(holder) { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
     val listState = remember(holder) { LazyListState(holder.firstVisibleIndex, holder.firstVisibleOffset) }
     DisposableEffect(holder, listState) {
         onDispose {
@@ -247,22 +261,47 @@ fun NotificationsScreen(
         }
     }
 
-    suspend fun loadFirstPage() {
-        state = NotificationsState.Loading
-        state = try {
+    suspend fun loadFirstPage(preserveContent: Boolean = false) {
+        val previous = state
+        if (!preserveContent) state = NotificationsState.Loading
+        try {
             val page = NotificationsRepository.notifications(api, types = filter.typesParam())
             val fresh = page.items.distinctBy { it.id }
             // Only the unfiltered view advances the shared read mark:
             // a filtered page's newest id is not the stream's newest.
             if (filter == NotificationFilter.All) onNewestLoaded(fresh.firstOrNull()?.id)
-            if (fresh.isEmpty()) NotificationsState.Empty
+            state = if (fresh.isEmpty()) NotificationsState.Empty
             else NotificationsState.Content(fresh, page.nextMaxId, loadingMore = false)
+            refreshError = null
         } catch (e: ApiError) {
-            NotificationsState.Error("Could not load notifications: the server returned error ${e.status}. Check your connection, then retry.")
+            val message = "Could not load notifications: the server returned error ${e.status}. Check your connection, then retry."
+            if (preserveContent && previous is NotificationsState.Content) {
+                state = previous
+                refreshError = "Could not refresh notifications. Showing the last loaded list."
+            } else {
+                state = NotificationsState.Error(message)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            NotificationsState.Error("Could not load notifications: ${e.message ?: "network error"}. Check your connection, then retry.")
+            if (preserveContent && previous is NotificationsState.Content) {
+                state = previous
+                refreshError = "Could not refresh notifications: ${e.message ?: "network error"}. Showing the last loaded list."
+            } else {
+                state = NotificationsState.Error("Could not load notifications: ${e.message ?: "network error"}. Check your connection, then retry.")
+            }
+        }
+    }
+
+    fun refresh() {
+        if (isRefreshing) return
+        isRefreshing = true
+        scope.launch {
+            try {
+                loadFirstPage(preserveContent = state is NotificationsState.Content)
+            } finally {
+                isRefreshing = false
+            }
         }
     }
 
@@ -273,7 +312,7 @@ fun NotificationsScreen(
         val maxId = current.nextMaxId ?: return // end reached
         if (current.loadingMore) return
 
-        state = current.copy(loadingMore = true)
+        state = current.copy(loadingMore = true, loadMoreError = null)
         val requestFilter = filter
         // Write results to the holder that started the request: `state`
         // follows the active filter, and a filter switch mid-flight must not
@@ -282,23 +321,27 @@ fun NotificationsScreen(
         scope.launch {
             try {
                 val page = NotificationsRepository.notifications(api, maxId, requestFilter.typesParam())
-                val base = (requestHolder.state as? NotificationsState.Content)?.items ?: current.items
-                val baseIds = base.mapTo(HashSet()) { it.id }
-                val fresh = page.items.filterNot { it.id in baseIds }
-                requestHolder.state = NotificationsState.Content(base + fresh, page.nextMaxId, loadingMore = false)
+                val latest = requestHolder.state as? NotificationsState.Content ?: current
+                requestHolder.state = appendNotificationPage(latest, page.items, page.nextMaxId)
             } catch (e: ApiError) {
-                scope.launch {
-                    snackbarHostState.showSnackbar("Could not load older notifications: the server returned error ${e.status}. Scroll to try again.")
+                (requestHolder.state as? NotificationsState.Content)?.let { latest ->
+                    requestHolder.state = latest.copy(
+                        loadingMore = false,
+                        loadMoreError = "Could not load older notifications: the server returned error ${e.status}. Retry below.",
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                scope.launch {
-                    snackbarHostState.showSnackbar("Could not load older notifications: ${e.message ?: "network error"}. Scroll to try again.")
+                (requestHolder.state as? NotificationsState.Content)?.let { latest ->
+                    requestHolder.state = latest.copy(
+                        loadingMore = false,
+                        loadMoreError = "Could not load older notifications: ${e.message ?: "network error"}. Retry below.",
+                    )
                 }
             } finally {
-                // Success already cleared it; failure and cancellation (screen
-                // left mid-request) must not leave the cached holder stuck.
+                // Cancellation while the screen is left mid-request must not
+                // leave the cached holder stuck in its loading state.
                 (requestHolder.state as? NotificationsState.Content)
                     ?.takeIf { it.loadingMore }
                     ?.let { requestHolder.state = it.copy(loadingMore = false) }
@@ -345,23 +388,27 @@ fun NotificationsScreen(
         }
     }
 
-    // Infinite scroll: the flow emits on SCROLL POSITION changes only and
-    // the state is read inside collect. A failed page (loadingMore reset
-    // without any scroll change) therefore cannot re-trigger itself in a
-    // request/snackbar loop — the user has to scroll again to retry.
+    // Infinite scroll is driven by position and list sizes, never by the
+    // request state. A failure changes neither, so it cannot retrigger;
+    // loadMoreError additionally requires the inline Retry action.
     LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+        snapshotFlow {
+            Triple(
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0,
+                renderedCount,
+                rawCount,
+            )
+        }
             .distinctUntilChanged()
-            .collect { lastVisible ->
+            .collect { (lastVisible, rendered, raw) ->
                 val current = state as? NotificationsState.Content ?: return@collect
-                if (current.nextMaxId == null || current.loadingMore) return@collect
-                if (lastVisible >= current.items.size - 3) loadNextPage()
+                if (current.nextMaxId == null || current.loadingMore || current.loadMoreError != null) return@collect
+                if (lastVisible >= rendered - 3 || (rendered <= 3 && raw > 0)) loadNextPage()
             }
     }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             FilterChipRow(
@@ -375,7 +422,11 @@ fun NotificationsScreen(
                     }
                 },
             )
-            Box(modifier = Modifier.fillMaxSize().weight(1f)) {
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = ::refresh,
+                modifier = Modifier.fillMaxSize().weight(1f),
+            ) {
                 when (val s = state) {
                     NotificationsState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(
@@ -397,40 +448,90 @@ fun NotificationsScreen(
                         }
                     }
 
-                    NotificationsState.Empty -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = when (filter) {
-                                NotificationFilter.All -> "No notifications yet. Mentions, favourites, boosts, and new followers will appear here."
-                                NotificationFilter.Mentions -> "No mentions yet. When someone mentions you, it will appear here."
-                                NotificationFilter.Favourites -> "No favourites yet. When someone favourites one of your posts, it will appear here."
-                                NotificationFilter.Boosts -> "No boosts yet. When someone boosts one of your posts, it will appear here."
-                                NotificationFilter.Follows -> "No follows yet. New followers and follow requests will appear here."
-                                NotificationFilter.Polls -> "No poll notifications yet. Polls you voted in will appear here when they close."
-                                NotificationFilter.Edits -> "No edited posts yet. Edits to posts you interacted with will appear here."
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                    NotificationsState.Empty -> LazyColumn(Modifier.fillMaxSize()) {
+                        item(key = "empty") {
+                            Box(Modifier.fillParentMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = when (filter) {
+                                        NotificationFilter.All -> "No notifications yet. Mentions, favourites, boosts, and new followers will appear here."
+                                        NotificationFilter.Mentions -> "No mentions yet. When someone mentions you, it will appear here."
+                                        NotificationFilter.Favourites -> "No favourites yet. When someone favourites one of your posts, it will appear here."
+                                        NotificationFilter.Boosts -> "No boosts yet. When someone boosts one of your posts, it will appear here."
+                                        NotificationFilter.Follows -> "No follows yet. New followers and follow requests will appear here."
+                                        NotificationFilter.Polls -> "No poll notifications yet. Polls you voted in will appear here when they close."
+                                        NotificationFilter.Edits -> "No edited posts yet. Edits to posts you interacted with will appear here."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
                     }
 
-                    is NotificationsState.Content -> LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(count = s.items.size, key = { s.items[it].id }) { index ->
-                            NotificationRow(
-                                notification = s.items[index],
-                                onOpenThread = onOpenThread,
-                                onOpenProfile = onOpenProfile,
-                                onOpenFollowRequests = onOpenFollowRequests,
-                            )
-                            if (index < s.items.lastIndex) HorizontalDivider()
+                    is NotificationsState.Content -> {
+                        val groups = remember(s.items) { groupNotifications(s.items) }
+                        SideEffect {
+                            renderedCount = groups.size
+                            rawCount = s.items.size
                         }
-                        if (s.loadingMore) {
-                            item(key = "loading-more") {
-                                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.semantics { contentDescription = "Loading older notifications" },
-                                    )
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            refreshError?.let { message ->
+                                item(key = "refresh-error") {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                                        Button(
+                                            onClick = ::refresh,
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .semantics { contentDescription = "Retry refreshing notifications" },
+                                        ) {
+                                            Text("Retry")
+                                        }
+                                    }
+                                }
+                            }
+                            items(count = groups.size, key = { groups[it].key }) { index ->
+                                NotificationRow(
+                                    group = groups[index],
+                                    api = api,
+                                    onOpenThread = onOpenThread,
+                                    onOpenProfile = onOpenProfile,
+                                    onOpenFollowRequests = onOpenFollowRequests,
+                                )
+                                if (index < groups.lastIndex) HorizontalDivider()
+                            }
+                            if (s.loadingMore) {
+                                item(key = "loading-more") {
+                                    Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.semantics { contentDescription = "Loading older notifications" },
+                                        )
+                                    }
+                                }
+                            }
+                            s.loadMoreError?.let { message ->
+                                item(key = "load-more-error") {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(message, style = MaterialTheme.typography.bodyMedium)
+                                        Button(
+                                            onClick = ::loadNextPage,
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .semantics { contentDescription = "Retry loading older notifications" },
+                                        ) {
+                                            Text("Retry")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -490,28 +591,22 @@ private fun NotificationFilter.label(): String = when (this) {
 }
 
 /**
- * One notification row: type icon, actor avatar, concrete label, plain
- * text status excerpt, relative time. Status-bearing rows navigate to
- * the thread; follow / follow_request rows navigate to the actor's
- * profile, and follow_request rows carry an extra affordance to the
- * follow-requests screen.
+ * One notification row: type icon, actor avatar, concrete label, filtered
+ * status excerpt, and relative time. Status-bearing rows open the thread.
  */
 @Composable
 private fun NotificationRow(
-    notification: Notification,
+    group: NotificationGroup,
+    api: Api,
     onOpenThread: (String) -> Unit,
     onOpenProfile: (String) -> Unit,
     onOpenFollowRequests: () -> Unit,
 ) {
-    val label = notificationLabel(notification)
-    // Boost notifications wrap the original status (wrapper content is
-    // empty); show and open the displayed inner status, matching the
-    // unwrap behavior of StatusCard.
+    val notification = group.notifications.first()
+    val label = notificationLabel(group)
+    // Boost notifications wrap the original status. Show and open the
+    // displayed inner status, matching StatusCard.
     val shownStatus = notification.status?.let { it.reblog ?: it }
-    // Plain-text extraction is cached in StatusText and remembered per
-    // content, so recompositions do not re-parse the HTML.
-    val excerptHtml = shownStatus?.content
-    val excerpt = remember(excerptHtml) { excerptHtml?.let { StatusText.plain(it) } }
     val statusId = shownStatus?.id
     val rowDescription = when {
         statusId != null -> "$label. Opens the post"
@@ -562,17 +657,11 @@ private fun NotificationRow(
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = if (excerpt == null) 2 else 1,
+                maxLines = if (shownStatus == null) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (!excerpt.isNullOrEmpty()) {
-                Text(
-                    text = excerpt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (shownStatus != null) {
+                NotificationStatusExcerpt(status = shownStatus, api = api)
             }
         }
         Text(
@@ -593,10 +682,123 @@ private fun NotificationRow(
     }
 }
 
-/** "Name favourited" style label, falling back to @acct like the web client. */
-private fun notificationLabel(notification: Notification): String {
-    val account = notification.account
-    val name = account.display_name?.takeIf { it.isNotBlank() } ?: "@${account.acct}"
+/** Resolve filtering before composing any excerpt text, including on a cold cache. */
+@Composable
+private fun NotificationStatusExcerpt(status: Status, api: Api) {
+    val token = api.token ?: ""
+    var filterHit: FilterHit? by remember(status.id, token) {
+        mutableStateOf(
+            StatusCardLogic.initialFilterHit(
+                filtered = status.filtered,
+                contentHtml = status.content,
+                spoiler = status.spoiler_text,
+                pollOptions = status.poll?.options?.map { it.title }.orEmpty(),
+                mediaDescriptions = status.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+                peekedFilters = FilterCache.peek(token),
+                context = "notifications",
+                nowMs = System.currentTimeMillis(),
+            ),
+        )
+    }
+    var filtersPending by remember(status.id, token) {
+        mutableStateOf(filterHit == null && FilterCache.peek(token) == null)
+    }
+    LaunchedEffect(status.id, token, filtersPending) {
+        if (!filtersPending) return@LaunchedEffect
+        try {
+            val filters = FilterCache.current(api, token)
+            val now = System.currentTimeMillis()
+            filterHit = withContext(Dispatchers.Default) {
+                FilterEngine.verdict(status.filtered, "notifications", now)
+                    ?: StatusCardLogic.clientMatch(
+                        filters,
+                        status.content,
+                        status.spoiler_text,
+                        status.poll?.options?.map { it.title }.orEmpty(),
+                        status.media_attachments.mapNotNull { it.description?.takeIf(String::isNotBlank) },
+                        "notifications",
+                        now,
+                    )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Match StatusCard: a failed filter fetch leaves the post visible.
+        }
+        filtersPending = false
+    }
+    var revealed by remember(status.id, token) { mutableStateOf(false) }
+
+    if (filtersPending) {
+        Text(
+            text = "Checking post filters…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        return
+    }
+    filterHit?.takeUnless { revealed }?.let { hit ->
+        FilteredNotificationExcerpt(hit = hit, onShow = { revealed = true })
+        return
+    }
+
+    val excerpt = remember(status.content) { StatusText.plain(status.content) }
+    if (excerpt.isNotEmpty()) {
+        Text(
+            text = excerpt,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Hide, warn, and blur all keep compact excerpts concealed until explicit consent. */
+@Composable
+private fun FilteredNotificationExcerpt(hit: FilterHit, onShow: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "Post hidden by filter: ${hit.title}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(
+            onClick = onShow,
+            modifier = Modifier
+                .heightIn(min = 48.dp)
+                .semantics { contentDescription = "Show post hidden by filter ${hit.title}" },
+        ) {
+            Text("Show anyway")
+        }
+    }
+}
+
+/** Accessible actor summary, with at most two names and a remaining actor count. */
+private fun notificationLabel(group: NotificationGroup): String {
+    val notification = group.notifications.first()
+    val name = actorName(notification)
+    if (group.notifications.size > 1 && (notification.type == "favourite" || notification.type == "reblog")) {
+        val actors = group.notifications.distinctBy { it.account.id }
+        val names = actors.map(::actorName)
+        val verb = if (notification.type == "favourite") "favourited" else "boosted"
+        return when (names.size) {
+            1 -> "${names[0]} $verb"
+            2 -> "${names[0]} and ${names[1]} $verb"
+            else -> {
+                val remaining = names.size - 2
+                "${names[0]}, ${names[1]} and $remaining ${if (remaining == 1) "other" else "others"} $verb"
+            }
+        }
+    }
     return when (notification.type) {
         "mention" -> "$name mentioned you"
         "status" -> "$name posted"
@@ -606,8 +808,15 @@ private fun notificationLabel(notification: Notification): String {
         "follow_request" -> "$name requested to follow you"
         "poll" -> "A poll you took part in has ended"
         "update" -> "$name edited a post"
-        else -> "$name (${notification.type})"
+        "admin.sign_up" -> "$name signed up"
+        "admin.report" -> "$name submitted a report"
+        else -> "$name sent a notification"
     }
+}
+
+private fun actorName(notification: Notification): String {
+    val account = notification.account
+    return account.display_name?.takeIf { it.isNotBlank() } ?: "@${account.acct}"
 }
 
 private fun typeIcon(type: String) = when (type) {
@@ -615,10 +824,11 @@ private fun typeIcon(type: String) = when (type) {
     "status" -> Icons.Outlined.ChatBubbleOutline
     "reblog" -> Icons.Outlined.Repeat
     "favourite" -> Icons.Filled.Star
-    "follow" -> Icons.Outlined.PersonAdd
+    "follow", "admin.sign_up" -> Icons.Outlined.PersonAdd
     "follow_request" -> Icons.Outlined.PersonOutline
     "poll" -> Icons.Outlined.Poll
     "update" -> Icons.Outlined.Edit
+    "admin.report" -> Icons.Outlined.Flag
     else -> Icons.Outlined.Notifications
 }
 

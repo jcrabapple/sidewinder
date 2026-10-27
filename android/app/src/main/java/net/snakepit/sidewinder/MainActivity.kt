@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +44,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SecondaryTabRow
@@ -62,6 +65,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
@@ -94,6 +98,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -103,6 +109,7 @@ import net.snakepit.sidewinder.core.model.Session
 import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.notify.NotifyScheduler
+import net.snakepit.sidewinder.core.notify.NotifyState
 import net.snakepit.sidewinder.core.notifications.UnreadStore
 import net.snakepit.sidewinder.core.search.SearchRepository
 import net.snakepit.sidewinder.core.settings.AppSettings
@@ -150,6 +157,22 @@ private enum class TopLevel(val route: String, val label: String, val icon: Imag
     Notifications("notifications", "Notifications", Icons.Filled.Notifications),
     Search("search", "Search", Icons.Filled.Search),
     Settings("settings", "Settings", Icons.Filled.Settings),
+}
+
+private fun topLevelBadgeLabel(count: Int): String =
+    if (count >= UnreadStore.WINDOW) "${UnreadStore.WINDOW}+" else count.toString()
+
+@Composable
+private fun TopLevelNavigationIcon(item: TopLevel, badgeCount: Int) {
+    if (badgeCount > 0) {
+        BadgedBox(
+            badge = { Badge { Text(topLevelBadgeLabel(badgeCount)) } },
+        ) {
+            Icon(item.icon, contentDescription = null)
+        }
+    } else {
+        Icon(item.icon, contentDescription = item.label)
+    }
 }
 
 /** Content shared into the app via ACTION_SEND / ACTION_SEND_MULTIPLE. */
@@ -230,9 +253,11 @@ private fun AppRoot(activity: MainActivity) {
     var session by remember { mutableStateOf<Session?>(null) }
     var sessions by remember { mutableStateOf<List<Session>>(emptyList()) }
     var sessionLoaded by remember { mutableStateOf(false) }
+    var startupError by remember { mutableStateOf<String?>(null) }
+    var startupRetry by remember { mutableIntStateOf(0) }
     var settings by remember { mutableStateOf(AppSettings()) }
     var loginError by remember { mutableStateOf<String?>(null) }
-    var askedPermission by remember { mutableStateOf(false) }
+    var askedPermission by rememberSaveable { mutableStateOf(false) }
     val unreadStore = remember { UnreadStore(activity) }
     var unreadCount by remember { mutableStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
@@ -242,28 +267,63 @@ private fun AppRoot(activity: MainActivity) {
         ActivityResultContracts.RequestPermission(),
     ) { /* background polling just stays silent without the permission */ }
 
-    LaunchedEffect(Unit) {
-        settings = settingsStore.settings()
-        sessions = store.list()
-        session = store.active()
-        // Seed the badge from the cached count, then recount over the
-        // newest window so the badge is honest before the first render.
-        session?.let { s -> unreadCount = unreadStore.count(s.id) }
-        sessionLoaded = true
-    }
-
-    // Recount unread notifications whenever the active account changes.
-    LaunchedEffect(session?.id, sessionLoaded) {
-        val s = session ?: return@LaunchedEffect
-        if (!sessionLoaded) return@LaunchedEffect
+    LaunchedEffect(startupRetry) {
+        sessionLoaded = false
+        startupError = null
         try {
-            unreadCount = UnreadStore.recount(Api(s.base, s.token), s.id, unreadStore)
+            // Commit only a complete load. In particular, a settings failure
+            // must not turn an unreadable account file into a signed-out UI.
+            val loadedSettings = settingsStore.settings()
+            val loadedSessions = store.list()
+            val loadedSession = store.active()
+            settings = loadedSettings
+            sessions = loadedSessions
+            session = loadedSession
+            loadedSession?.let { s -> unreadCount = unreadStore.count(s.id) }
+            sessionLoaded = true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Fall back to the cached badge count; the recount retries on
-            // the next account change or app open.
-            unreadCount = unreadStore.count(s.id)
+            startupError = "Sidewinder could not read your saved accounts and settings. Nothing has been changed or signed out. Retry to read them again."
+        }
+    }
+
+    // Recount on account changes and every foreground return. Each account's
+    // effect owns its jobs, so a slow response from the previous account can
+    // never overwrite the newly selected account's badge.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(session?.id, sessionLoaded, lifecycleOwner) {
+        val target = session ?: return@LaunchedEffect
+        if (!sessionLoaded) return@LaunchedEffect
+
+        suspend fun recount() {
+            if (session?.id != target.id) return
+            unreadCount = unreadStore.count(target.id)
+            try {
+                val count = UnreadStore.recount(Api(target.base, target.token), target.id, unreadStore)
+                if (session?.id == target.id) unreadCount = count
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (session?.id == target.id) unreadCount = unreadStore.count(target.id)
+            }
+        }
+
+        var recountJob: Job? = null
+        fun requestRecount() {
+            recountJob?.cancel()
+            recountJob = launch { recount() }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) requestRecount()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        requestRecount()
+        try {
+            awaitCancellation()
+        } finally {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            recountJob?.cancel()
         }
     }
 
@@ -271,7 +331,8 @@ private fun AppRoot(activity: MainActivity) {
     // and ask for the notification permission once when enabling.
     // A signed-out app (session == null) must cancel the periodic work:
     // the old early-return left polling running after the last sign-out.
-    LaunchedEffect(settings.backgroundNotifications, session?.id) {
+    LaunchedEffect(settings.backgroundNotifications, session?.id, sessionLoaded, startupError) {
+        if (!sessionLoaded || startupError != null) return@LaunchedEffect
         if (settings.backgroundNotifications && session != null) {
             NotifyScheduler.ensure(activity)
             NotifyScheduler.runNow(activity)
@@ -289,7 +350,8 @@ private fun AppRoot(activity: MainActivity) {
     }
 
     // A completed OAuth round-trip lands here from the Custom Tab.
-    LaunchedEffect(redirect) {
+    LaunchedEffect(redirect, sessionLoaded, startupError) {
+        if (!sessionLoaded || startupError != null) return@LaunchedEffect
         val uri = redirect ?: return@LaunchedEffect
         try {
             handleOauthRedirect(activity, uri)
@@ -350,7 +412,12 @@ private fun AppRoot(activity: MainActivity) {
         Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
                 val active = session
+                val loadError = startupError
                 when {
+                    loadError != null -> StartupErrorScreen(
+                        message = loadError,
+                        onRetry = { startupRetry++ },
+                    )
                     !sessionLoaded -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
@@ -406,12 +473,24 @@ private fun AppTabs(
     onSettingsChanged: suspend () -> Unit,
 ) {
     val nav = rememberNavController()
+    val notifyState = remember { NotifyState(activity) }
     val backStackEntry by nav.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val api = remember(session.token) { Api(session.base, session.token) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
+    // Resolve filters alongside the first timeline request, not only after
+    // its rows compose. Cards still keep their neutral cold-cache guard.
+    LaunchedEffect(api, session.id) {
+        try {
+            FilterCache.current(api, session.token)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Card-level loading exposes the content if filters are unavailable.
+        }
+    }
     val topLevelRoutes = remember { TopLevel.entries.map { it.route }.toSet() }
     val openThread = remember(nav) { { id: String -> nav.navigate("thread/$id") } }
     val openProfile = remember(nav) { { id: String -> nav.navigate("profile/$id") } }
@@ -437,6 +516,8 @@ private fun AppTabs(
     // feeds directly and reach the open notifications screen via the bus;
     // the 15-minute poll worker keeps covering background badge counts.
     var streamingClient by remember { mutableStateOf<StreamingClient?>(null) }
+    val liveCurrentRoute by rememberUpdatedState(currentRoute)
+    val liveUnreadCount by rememberUpdatedState(unreadCount)
     fun restartStreaming(live: Boolean) {
         streamingClient?.stop()
         streamingClient = null
@@ -449,7 +530,19 @@ private fun AppTabs(
                 when (event) {
                     is StreamEvent.StatusUpdate -> TimelineStore.applyStreamed(session.id, event.status)
                     is StreamEvent.StatusDeleted -> TimelineStore.applyDelete(event.statusId)
-                    is StreamEvent.NotificationArrived -> StreamEventBus.publish(event)
+                    is StreamEvent.NotificationArrived -> {
+                        StreamEventBus.publish(event)
+                        if (liveCurrentRoute != TopLevel.Notifications.route) {
+                            scope.launch {
+                                // The store serializes a burst on the socket
+                                // thread; snapshot state alone under-counts it.
+                                val nextCount = unreadStore.increment(session.id)
+                                if (liveCurrentRoute != TopLevel.Notifications.route) {
+                                    onUnreadChanged(maxOf(liveUnreadCount, nextCount))
+                                }
+                            }
+                        }
+                    }
                     is StreamEvent.FiltersChanged -> FilterCache.invalidate(session.token)
                 }
             },
@@ -534,7 +627,34 @@ private fun AppTabs(
     }
 
     CompositionLocalProvider(LocalAppActions provides actions) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val useNavigationRail = maxWidth >= 600.dp
+        Row(Modifier.fillMaxSize()) {
+            if (useNavigationRail && currentRoute in topLevelRoutes) {
+                NavigationRail {
+                    TopLevel.entries.forEach { item ->
+                        val badgeCount = if (item == TopLevel.Notifications) unreadCount else 0
+                        val badgeLabel = topLevelBadgeLabel(badgeCount)
+                        NavigationRailItem(
+                            selected = currentRoute == item.route,
+                            onClick = {
+                                if (currentRoute == item.route) {
+                                    reselect.tryEmit(item.route)
+                                } else {
+                                    navigateTopLevel(item.route)
+                                }
+                            },
+                            modifier = Modifier.semantics {
+                                if (badgeCount > 0) stateDescription = "$badgeLabel unread"
+                            },
+                            icon = { TopLevelNavigationIcon(item, badgeCount) },
+                            label = { Text(item.label) },
+                        )
+                    }
+                }
+            }
     Scaffold(
+        modifier = Modifier.weight(1f),
         // Not edge-to-edge: the decor already applies system-bar insets,
         // so the default contentWindowInsets would pad the content a
         // second time below the top bar.
@@ -543,6 +663,9 @@ private fun AppTabs(
         topBar = {
             if (currentRoute in topLevelRoutes) {
                 TopAppBar(
+                    // A compact feed header leaves more room for posts while
+                    // retaining 48dp touch targets on every action.
+                    modifier = Modifier.height(56.dp),
                     // The activity is not edge-to-edge (the system already
                     // pads the content below the status bar); the default
                     // windowInsets would add that height a second time.
@@ -563,6 +686,14 @@ private fun AppTabs(
                         }
                     },
                     actions = {
+                        if (currentRoute == TopLevel.Notifications.route || currentRoute == TopLevel.Search.route) {
+                            IconButton(
+                                onClick = { openCompose(null) },
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(Icons.Filled.Edit, contentDescription = "New post")
+                            }
+                        }
                         IconButton(
                             onClick = { nav.navigate("catchup") },
                             modifier = Modifier.size(48.dp),
@@ -633,11 +764,17 @@ private fun AppTabs(
             }
         },
         bottomBar = {
-            if (currentRoute in topLevelRoutes) {
-                NavigationBar {
+            if (!useNavigationRail && currentRoute in topLevelRoutes) {
+                NavigationBar(
+                    modifier = Modifier.height(64.dp),
+                    // The decor already keeps the app above system navigation.
+                    // Applying the default inset here would pad it a second time
+                    // and squeeze the items out of a compact bar.
+                    windowInsets = WindowInsets(0, 0, 0, 0),
+                ) {
                     TopLevel.entries.forEach { item ->
                         val badgeCount = if (item == TopLevel.Notifications) unreadCount else 0
-                        val badgeLabel = if (badgeCount >= UnreadStore.WINDOW) "${UnreadStore.WINDOW}+" else badgeCount.toString()
+                        val badgeLabel = topLevelBadgeLabel(badgeCount)
                         NavigationBarItem(
                             selected = currentRoute == item.route,
                             onClick = {
@@ -653,17 +790,7 @@ private fun AppTabs(
                             modifier = Modifier.semantics {
                                 if (badgeCount > 0) stateDescription = "$badgeLabel unread"
                             },
-                            icon = {
-                                if (badgeCount > 0) {
-                                    BadgedBox(
-                                        badge = { Badge { Text(badgeLabel) } },
-                                    ) {
-                                        Icon(item.icon, contentDescription = null)
-                                    }
-                                } else {
-                                    Icon(item.icon, contentDescription = item.label)
-                                }
-                            },
+                            icon = { TopLevelNavigationIcon(item, badgeCount) },
                             label = { Text(item.label) },
                         )
                     }
@@ -714,9 +841,29 @@ private fun AppTabs(
                         onOpenProfile = openProfile,
                         onOpenFollowRequests = { nav.navigate("follow_requests") },
                         onNewestLoaded = { newest ->
-                            if (newest != null) scope.launch {
-                                unreadStore.setSeenTop(session.id, newest)
+                            if (newest != null) {
+                                // Clear the visible badge even if a disk or
+                                // worker-state failure needs recovery below.
                                 onUnreadChanged(0)
+                                scope.launch {
+                                    try {
+                                        unreadStore.setSeenTop(session.id, newest)
+                                        try {
+                                            notifyState.setLastNotifiedId(session.id, newest)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            notifyState.quarantineUnreadable()
+                                            notifyState.setLastNotifiedId(session.id, newest)
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        snackbar.showSnackbar(
+                                            "Notifications are read on screen, but the read position could not be saved. It may return after a restart.",
+                                        )
+                                    }
+                                }
                             }
                         },
                     )
@@ -729,6 +876,7 @@ private fun AppTabs(
                     onOpenThread = openThread,
                     onOpenProfile = openProfile,
                     onOpenTag = openTag,
+                    onCompose = openCompose,
                 )
             }
             composable(TopLevel.Settings.route) {
@@ -1080,6 +1228,8 @@ private fun AppTabs(
             }
         }
     }
+        }
+    }
     }
 }
 
@@ -1104,6 +1254,30 @@ private fun subScreenTitle(route: String?, args: Bundle?): String? = when (route
     "insights" -> "Insights"
     "moderation" -> "Moderation"
     else -> null
+}
+
+@Composable
+private fun StartupErrorScreen(message: String, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onRetry,
+            modifier = Modifier
+                .heightIn(min = 48.dp)
+                .semantics { contentDescription = "Retry reading saved accounts and settings" },
+        ) {
+            Text("Retry")
+        }
+    }
 }
 
 @Composable

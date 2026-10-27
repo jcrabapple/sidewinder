@@ -5,12 +5,13 @@
  * posts and replies to you), so this answers "I saw a post about X
  * recently" from the corpus the user actually saw.
  *
- * Hard cap of MAX_POSTS with oldest-first eviction (ULID ids are
- * time-ordered, so primary-key order IS chronology). Text only — no media,
- * no HTML — which keeps 10k posts around 7 MB. Off by default: nothing is
+ * Hard cap of MAX_POSTS per session with oldest-first eviction (ULID ids are
+ * time-ordered, so primary-key order IS chronology). Text only, no media,
+ * no HTML, which keeps 10k posts around 7 MB. Off by default: nothing is
  * written unless settings.seenHistory is on. Everything lives in this
- * browser's IndexedDB and clears with one button.
+ * browser's IndexedDB and each account clears its own history.
  */
+import { activeSession } from './auth'
 import { settings } from './settings'
 import { htmlToText } from '../util/text'
 import type { Status } from '../api/types'
@@ -28,18 +29,67 @@ export interface SeenPost {
   boosts: number
 }
 
-let dbPromise: Promise<IDBDatabase | null> | null = null
+interface StoredSeenPost extends SeenPost {
+  key: string
+  session: string
+}
 
-function openDb(): Promise<IDBDatabase | null> {
+const STORE = 'seenBySession'
+const LEGACY_STORE = 'seen'
+
+export function seenRecordKey(session: string, id: string): string {
+  return JSON.stringify([session, id])
+}
+
+/** Assign legacy or newly seen records to exactly one account. */
+export function scopeSeenPost(post: SeenPost, session: string): StoredSeenPost {
+  return { ...post, session, key: seenRecordKey(session, post.id) }
+}
+
+let dbPromise: Promise<IDBDatabase | null> | null = null
+let sessionGeneration = 0
+
+/** Invalidate reads that were started before an account change. */
+export function resetSeenPosts(): void {
+  sessionGeneration++
+}
+
+function openDb(session: string): Promise<IDBDatabase | null> {
   dbPromise ??= new Promise((resolve) => {
     try {
-      const req = indexedDB.open('sidewinder', 1)
+      const req = indexedDB.open('sidewinder', 2)
       req.onupgradeneeded = () => {
         const db = req.result
-        if (!db.objectStoreNames.contains('seen')) db.createObjectStore('seen', { keyPath: 'id' })
+        if (!db.objectStoreNames.contains(STORE)) {
+          const store = db.createObjectStore(STORE, { keyPath: 'key' })
+          store.createIndex('session', 'session')
+        }
+        // Version 1 had one global store. Claim its contents for the active
+        // account during the upgrade, then remove the unscoped store.
+        if (db.objectStoreNames.contains(LEGACY_STORE) && req.transaction) {
+          const scoped = req.transaction.objectStore(STORE)
+          const legacy = req.transaction.objectStore(LEGACY_STORE)
+          const cursor = legacy.openCursor()
+          cursor.onsuccess = () => {
+            const item = cursor.result
+            if (item) {
+              scoped.put(scopeSeenPost(item.value as SeenPost, session))
+              item.continue()
+            } else {
+              db.deleteObjectStore(LEGACY_STORE)
+            }
+          }
+        }
       }
-      req.onsuccess = () => resolve(req.result)
+      req.onsuccess = () => {
+        const db = req.result
+        db.onversionchange = () => db.close()
+        resolve(db)
+      }
       req.onerror = () => resolve(null)
+      // An older tab may still hold the v1 connection. Seen history is
+      // optional, so degrade instead of leaving Search and writes pending.
+      req.onblocked = () => resolve(null)
     } catch {
       // Private-browsing / blocked storage: the feature is simply off.
       resolve(null)
@@ -71,40 +121,49 @@ function toRecord(s: Status): SeenPost {
 }
 
 /** Record statuses shown by a timeline load. Boosts are unwrapped to the
- *  underlying post (a boost only re-confirms you saw the original). */
+ * underlying post (a boost only re-confirms you saw the original). */
 export async function recordSeenPosts(statuses: Status[]): Promise<void> {
-  if (!settings.value.seenHistory || statuses.length === 0) return
-  const db = await openDb()
-  if (!db) return
+  const session = activeSession.value?.id
+  const generation = sessionGeneration
+  if (!session || !settings.value.seenHistory || statuses.length === 0) return
+  const db = await openDb(session)
+  if (!db || generation !== sessionGeneration || activeSession.value?.id !== session) return
   try {
-    const records = new Map<string, SeenPost>()
+    const records = new Map<string, StoredSeenPost>()
     for (const s of statuses) {
       const inner = s.reblog ?? s
-      if (!records.has(inner.id)) records.set(inner.id, toRecord(inner))
+      if (!records.has(inner.id)) records.set(inner.id, scopeSeenPost(toRecord(inner), session))
     }
-    const tx = db.transaction('seen', 'readwrite')
-    const store = tx.objectStore('seen')
+    const tx = db.transaction(STORE, 'readwrite')
+    const store = tx.objectStore(STORE)
     for (const r of records.values()) store.put(r)
     await txDone(tx)
-    await evict(db)
+    await evict(db, session)
   } catch (e) {
     console.debug('seenPosts: record failed', e)
   }
 }
 
-async function evict(db: IDBDatabase): Promise<void> {
-  // Count via a separate (readonly) transaction FIRST: a readwrite
-  // transaction auto-commits once its request queue drains, so awaiting a
-  // promise mid-transaction before opening the cursor is unsafe.
-  const total = await seenPostsCount()
-  const excess = total - MAX_POSTS
+async function countFor(db: IDBDatabase, session: string): Promise<number> {
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const req = db.transaction(STORE).objectStore(STORE).index('session').count(IDBKeyRange.only(session))
+      req.onsuccess = () => resolve(req.result)
+      req.onerror = () => reject(req.error)
+    })
+  } catch {
+    return 0
+  }
+}
+
+async function evict(db: IDBDatabase, session: string): Promise<void> {
+  const excess = (await countFor(db, session)) - MAX_POSTS
   if (excess <= 0) return
-  const tx = db.transaction('seen', 'readwrite')
-  const store = tx.objectStore('seen')
-  // Primary keys are ULIDs: ascending cursor = oldest first.
+  const tx = db.transaction(STORE, 'readwrite')
+  const index = tx.objectStore(STORE).index('session')
   await new Promise<void>((resolve, reject) => {
     let left = excess
-    const req = store.openCursor()
+    const req = index.openCursor(IDBKeyRange.only(session))
     req.onsuccess = () => {
       const cursor = req.result
       if (!cursor || left <= 0) return resolve()
@@ -119,16 +178,20 @@ async function evict(db: IDBDatabase): Promise<void> {
 
 /** All tokens must appear (case-insensitive) in the post text or author. */
 export async function searchSeenPosts(query: string, limit = 80): Promise<SeenPost[]> {
-  const db = await openDb()
-  if (!db) return []
+  const session = activeSession.value?.id
+  const generation = sessionGeneration
+  if (!session) return []
   const tokens = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return []
+  const db = await openDb(session)
+  if (!db || generation !== sessionGeneration || activeSession.value?.id !== session) return []
   try {
-    const all = await new Promise<SeenPost[]>((resolve, reject) => {
-      const req = db.transaction('seen').objectStore('seen').getAll()
-      req.onsuccess = () => resolve(req.result as SeenPost[])
+    const all = await new Promise<StoredSeenPost[]>((resolve, reject) => {
+      const req = db.transaction(STORE).objectStore(STORE).index('session').getAll(IDBKeyRange.only(session))
+      req.onsuccess = () => resolve(req.result as StoredSeenPost[])
       req.onerror = () => reject(req.error)
     })
+    if (generation !== sessionGeneration || activeSession.value?.id !== session) return []
     return all
       .filter((p) => {
         const hay = `${p.text}\n${p.acct}\n${p.name}`.toLowerCase()
@@ -143,25 +206,34 @@ export async function searchSeenPosts(query: string, limit = 80): Promise<SeenPo
 }
 
 export async function seenPostsCount(): Promise<number> {
-  const db = await openDb()
-  if (!db) return 0
-  try {
-    return await new Promise<number>((resolve, reject) => {
-      const req = db.transaction('seen').objectStore('seen').count()
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    })
-  } catch {
-    return 0
-  }
+  const session = activeSession.value?.id
+  const generation = sessionGeneration
+  if (!session) return 0
+  const db = await openDb(session)
+  if (!db || generation !== sessionGeneration || activeSession.value?.id !== session) return 0
+  const count = await countFor(db, session)
+  return generation === sessionGeneration && activeSession.value?.id === session ? count : 0
 }
 
 export async function clearSeenPosts(): Promise<void> {
-  const db = await openDb()
-  if (!db) return
+  const session = activeSession.value?.id
+  const generation = sessionGeneration
+  if (!session) return
+  const db = await openDb(session)
+  if (!db || generation !== sessionGeneration || activeSession.value?.id !== session) return
   try {
-    const tx = db.transaction('seen', 'readwrite')
-    tx.objectStore('seen').clear()
+    const tx = db.transaction(STORE, 'readwrite')
+    const index = tx.objectStore(STORE).index('session')
+    await new Promise<void>((resolve, reject) => {
+      const req = index.openCursor(IDBKeyRange.only(session))
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) return resolve()
+        cursor.delete()
+        cursor.continue()
+      }
+      req.onerror = () => reject(req.error)
+    })
     await txDone(tx)
   } catch (e) {
     console.debug('seenPosts: clear failed', e)

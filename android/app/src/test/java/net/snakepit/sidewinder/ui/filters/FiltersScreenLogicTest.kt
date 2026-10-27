@@ -42,4 +42,49 @@ class FiltersScreenLogicTest {
     fun `unparseable expires_at returns null so the row can fall back to the raw text`() {
         assertNull(formatExpiresAt("not-a-date"))
     }
+
+    @Test
+    fun `untouched expiry sends the duration remaining at save time`() {
+        val remaining = expiresInForUpdate(
+            existingExpiresAt = "2026-11-01T14:30:00.000Z",
+            expiryChanged = false,
+            requestedSeconds = null,
+            now = java.time.Instant.parse("2026-11-01T14:15:00.000Z"),
+        )
+        assertEquals(900L, remaining)
+    }
+
+    @Test
+    fun `untouched expiry rounds a positive partial second up and stops at expiration`() {
+        val expiry = "2026-11-01T14:30:01.500Z"
+        assertEquals(
+            2L,
+            expiresInForUpdate(expiry, false, null, java.time.Instant.parse("2026-11-01T14:30:00.000Z")),
+        )
+        assertNull(expiresInForUpdate(expiry, false, null, java.time.Instant.parse(expiry)))
+        assertNull(expiresInForUpdate(expiry, false, null, java.time.Instant.parse("2026-11-01T14:30:02.000Z")))
+    }
+
+    @Test
+    fun `explicit expiry change replaces the existing timestamp`() {
+        val changed = expiresInForUpdate(
+            existingExpiresAt = "2026-11-01T14:30:00.000Z",
+            expiryChanged = true,
+            requestedSeconds = 3_600L,
+            now = java.time.Instant.parse("2026-11-01T14:15:00.000Z"),
+        )
+        assertEquals(3_600L, changed)
+    }
+
+    @Test
+    fun `explicit never removes an existing expiry`() {
+        assertNull(
+            expiresInForUpdate(
+                existingExpiresAt = "2026-11-01T14:30:00.000Z",
+                expiryChanged = true,
+                requestedSeconds = null,
+                now = java.time.Instant.parse("2026-11-01T14:15:00.000Z"),
+            ),
+        )
+    }
 }

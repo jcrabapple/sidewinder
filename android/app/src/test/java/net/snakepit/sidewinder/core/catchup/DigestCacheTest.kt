@@ -1,5 +1,6 @@
 package net.snakepit.sidewinder.core.catchup
 
+import java.util.concurrent.TimeUnit
 import net.snakepit.sidewinder.core.model.Account
 import net.snakepit.sidewinder.core.model.Status
 import org.junit.After
@@ -14,6 +15,7 @@ class DigestCacheTest {
     fun clear() {
         DigestCache.invalidate("a")
         DigestCache.invalidate("b")
+        DigestCache.nanoTime = System::nanoTime
     }
 
     private fun status(id: String) = Status(
@@ -30,6 +32,28 @@ class DigestCacheTest {
     }
 
     @Test
+    fun freshEntryIsReusedBeforeFiveMinutes() {
+        var now = 0L
+        DigestCache.nanoTime = { now }
+        DigestCache.put("a", 24, listOf(status("1")))
+
+        now = TimeUnit.MINUTES.toNanos(5) - 1L
+
+        assertEquals(listOf("1"), DigestCache.get("a", 24)?.map { it.id })
+    }
+
+    @Test
+    fun entryExpiresAtFiveMinutes() {
+        var now = 0L
+        DigestCache.nanoTime = { now }
+        DigestCache.put("a", 24, listOf(status("1")))
+
+        now = TimeUnit.MINUTES.toNanos(5)
+
+        assertNull(DigestCache.get("a", 24))
+    }
+
+    @Test
     fun rangesAndSessionsAreSeparateKeys() {
         DigestCache.put("a", 24, listOf(status("1")))
         assertNull(DigestCache.get("a", 6))
@@ -38,9 +62,13 @@ class DigestCacheTest {
 
     @Test
     fun invalidateDropsEveryRangeOfOneSession() {
+        var now = 0L
+        DigestCache.nanoTime = { now }
         DigestCache.put("a", 1, listOf(status("1")))
         DigestCache.put("a", 24, listOf(status("2")))
         DigestCache.put("b", 24, listOf(status("3")))
+
+        now = TimeUnit.MINUTES.toNanos(1)
         DigestCache.invalidate("a")
         assertNull(DigestCache.get("a", 1))
         assertNull(DigestCache.get("a", 24))

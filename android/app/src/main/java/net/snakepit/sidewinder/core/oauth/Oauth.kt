@@ -3,6 +3,8 @@ package net.snakepit.sidewinder.core.oauth
 import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.MapSerializer
@@ -73,6 +75,9 @@ private val clientsJson = Json {
 
 private val clientsCodec = MapSerializer(String.serializer(), ClientCredentials.serializer())
 
+/** Process-wide protection for client-store read-modify-write cycles. */
+private val clientsMutex = Mutex()
+
 /**
  * Per-base OAuth client credentials, persisted at filesDir/sidewinder/clients.json.
  * Port of web src/api/oauth.ts localStorage store. Keys are "base::scopes" so
@@ -116,7 +121,7 @@ internal suspend fun saveClients(context: Context, clients: Map<String, ClientCr
     }
 }
 
-internal suspend fun deleteClient(context: Context, base: String, scopes: String) {
+internal suspend fun deleteClient(context: Context, base: String, scopes: String): Unit = clientsMutex.withLock {
     val clients = loadClients(context).toMutableMap()
     clients.remove(clientKey(base, scopes))
     if (clients.isEmpty()) clientsFile(context).delete() else saveClients(context, clients)
@@ -187,7 +192,9 @@ suspend fun getOrCreateClient(
         throw OauthException("The server refused app registration: ${e.message} Check the instance address and try again.")
     }
     val creds = ClientCredentials(created.client_id, created.client_secret)
-    saveClients(context, loadClients(context) + (key to creds))
+    clientsMutex.withLock {
+        saveClients(context, loadClients(context) + (key to creds))
+    }
     return creds
 }
 
@@ -299,14 +306,18 @@ fun authorizeUrl(base: String, credentials: ClientCredentials, scopes: String = 
     return AuthorizeRequest(base, scopes, credentials, url, state)
 }
 
+/** Use the server's granted scope unless it omits or blanks that field. */
+internal fun effectiveTokenScopes(granted: String, requested: String): String =
+    granted.ifBlank { requested }
+
 /** Exchange the authorization code for a token via POST /oauth/token. */
 suspend fun exchangeToken(
     base: String,
     code: String,
     credentials: ClientCredentials,
     scopes: String,
-): String {
-    val token = Api(base).postForm(
+): TokenResponse {
+    return Api(base).postForm(
         "/oauth/token",
         mapOf(
             "grant_type" to "authorization_code",
@@ -318,7 +329,6 @@ suspend fun exchangeToken(
         ),
         TokenResponse.serializer(),
     )
-    return token.access_token
 }
 
 /** Fetch the account snapshot for a fresh token via verify_credentials. */
@@ -328,13 +338,13 @@ suspend fun fetchAccount(base: String, token: String): AccountCredentials {
 }
 
 /** Build a Session (id = random UUID) from a freshly exchanged token. */
-suspend fun buildSession(base: String, token: String, scopes: String): Session =
+suspend fun buildSession(base: String, token: TokenResponse, requestedScopes: String): Session =
     Session(
         id = UUID.randomUUID().toString(),
         base = base,
-        token = token,
-        account = fetchAccount(base, token),
-        scopes = scopes,
+        token = token.access_token,
+        account = fetchAccount(base, token.access_token),
+        scopes = effectiveTokenScopes(token.scope, requestedScopes),
     )
 
 /** Highest-value error message to show the user during login. Port of loginErrorMessage. */

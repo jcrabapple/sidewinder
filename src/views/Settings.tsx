@@ -35,6 +35,8 @@ export function SettingsView() {
   const s = settings.value
   const session = activeSession.value
   const [seenCount, setSeenCount] = useState<number | null>(null)
+  const [clearingSeen, setClearingSeen] = useState(false)
+  const [seenError, setSeenError] = useState<string | null>(null)
   const [muteDraft, setMuteDraft] = useState('')
 
   useEffect(() => {
@@ -51,8 +53,19 @@ export function SettingsView() {
   }, [s.seenHistory])
 
   async function handleClearSeen() {
-    await clearSeenPosts()
-    setSeenCount(0)
+    if (clearingSeen) return
+    setClearingSeen(true)
+    setSeenError(null)
+    try {
+      await clearSeenPosts()
+      const remaining = await seenPostsCount()
+      if (remaining > 0) throw new Error('Seen-post history could not be cleared. Try again.')
+      setSeenCount(0)
+    } catch (e) {
+      setSeenError(e instanceof Error ? e.message : 'Seen-post history could not be cleared. Try again.')
+    } finally {
+      setClearingSeen(false)
+    }
   }
 
   return (
@@ -140,11 +153,12 @@ export function SettingsView() {
             <span class="help-text" role="status">
               {seenCount === null ? 'Counting…' : `${seenCount.toLocaleString()} posts cached (about ${seenCount === 0 ? 0 : Math.max(1, Math.round((seenCount * 700) / 1e6))} MB)`}
             </span>
-            <button class="btn" onClick={() => void handleClearSeen()}>
-              Clear history
+            <button class="btn" disabled={clearingSeen} onClick={() => void handleClearSeen()}>
+              {clearingSeen ? 'Clearing…' : 'Clear history'}
             </button>
           </div>
         )}
+        {s.seenHistory && seenError && <p class="error-note" role="alert">{seenError}</p>}
       </section>
 
       <section class="settings__section card" aria-labelledby="settings-mutes">

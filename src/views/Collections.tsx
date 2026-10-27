@@ -31,6 +31,7 @@ export function CollectionsView({ kind }: { kind: 'favourites' | 'bookmarks' }) 
     const seq = ++requestSeq.current
     setState('loading')
     setError(null)
+    setLoadingMore(false)
     setItems([])
     setNextMaxId(null)
     try {
@@ -48,20 +49,25 @@ export function CollectionsView({ kind }: { kind: 'favourites' | 'bookmarks' }) 
 
   async function loadMore() {
     if (!nextMaxId || loadingMore) return
+    const seq = ++requestSeq.current
+    const cursor = nextMaxId
     setLoadingMore(true)
+    setError(null)
     try {
       const page = await api.value.page<Status>(endpoint, {
-        query: { limit: PAGE_SIZE, max_id: nextMaxId },
+        query: { limit: PAGE_SIZE, max_id: cursor },
       })
+      if (seq !== requestSeq.current) return
       setItems((cur) => {
         const seen = new Set(cur.map((s) => s.id))
         return [...cur, ...page.items.filter((s) => !seen.has(s.id))]
       })
       setNextMaxId(page.nextMaxId)
     } catch (e) {
+      if (seq !== requestSeq.current) return
       setError(e instanceof Error ? e.message : 'More posts could not be loaded.')
     } finally {
-      setLoadingMore(false)
+      if (seq === requestSeq.current) setLoadingMore(false)
     }
   }
 

@@ -50,7 +50,7 @@ object SearchRepository {
         limit: Int = PAGE_LIMIT,
         offset: Int = 0,
         /** Ask the server to webfinger/fetch remote accounts or posts by URL. */
-        resolve: Boolean = false,
+        resolve: Boolean = shouldResolveSearch(query),
     ): SearchResults = api.request(
         path = "/api/v2/search",
         serializer = SearchResults.serializer(),
@@ -62,6 +62,13 @@ object SearchRepository {
             if (resolve) put("resolve", listOf("true"))
         },
     )
+}
+
+/** Pasted web addresses need server-side resolution to find remote objects. */
+internal fun shouldResolveSearch(query: String): Boolean {
+    val trimmed = query.trim()
+    return trimmed.startsWith("https://", ignoreCase = true) ||
+        trimmed.startsWith("http://", ignoreCase = true)
 }
 
 /** Sum of recent-use counts across the history buckets, for row display. */

@@ -271,16 +271,19 @@ class Api(base: String, @Volatile var token: String? = null) {
         return Page(items, nextMaxIdFromLink(root, raw.link))
     }
 
-    private companion object {
+    companion object {
         /**
          * One process-wide client: every Api instance used to build its
          * own connection pool and thread pool. Per-instance state stays
          * `root` + `token`.
          */
-        val client: OkHttpClient = OkHttpClient.Builder()
+        private val client: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
+
+        /** Derived clients retain the shared dispatcher and connection pool. */
+        internal fun newClientBuilder(): OkHttpClient.Builder = client.newBuilder()
     }
 }

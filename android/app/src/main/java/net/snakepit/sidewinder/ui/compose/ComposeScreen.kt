@@ -89,6 +89,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import net.snakepit.sidewinder.core.compose.ComposeDraft
+import net.snakepit.sidewinder.core.compose.DraftChainSegment
 import net.snakepit.sidewinder.core.compose.DraftMediaRef
 import net.snakepit.sidewinder.core.compose.DraftStore
 import net.snakepit.sidewinder.core.model.MediaAttachment
@@ -97,7 +98,9 @@ import net.snakepit.sidewinder.core.model.Status
 import net.snakepit.sidewinder.core.network.Api
 import net.snakepit.sidewinder.core.network.ApiError
 import net.snakepit.sidewinder.core.network.NetworkError
+import net.snakepit.sidewinder.core.schedule.ScheduleDates
 import net.snakepit.sidewinder.core.schedule.ScheduledStatus
+import net.snakepit.sidewinder.core.search.SearchRepository
 import net.snakepit.sidewinder.core.thread.ThreadRepository
 import net.snakepit.sidewinder.ui.app.LocalAppSettings
 import net.snakepit.sidewinder.ui.schedule.isoFromMillis
@@ -106,12 +109,16 @@ import net.snakepit.sidewinder.ui.timeline.TimelineStore
 import org.jsoup.Jsoup
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Locale
 import java.util.UUID
 
 internal const val CHAR_LIMIT = 5000
 internal const val MAX_MEDIA = 6
 internal const val POLL_OPTION_LIMIT = 50
 internal const val ALT_TEXT_LIMIT = 1500
+
+/** Suggestions shown at once for @mention / #hashtag autocomplete. */
+private const val AUTOCOMPLETE_LIMIT = 5
 
 internal val EXPIRY_OPTIONS = listOf(
     1_800L to "30 minutes",
@@ -134,6 +141,10 @@ private enum class ComposeMode { New, Reply, Quote, Edit }
  *
  * New-post drafts persist per session (debounced) and restore on open;
  * reply and edit drafts do not. Closing with unsaved work asks first.
+ * New, reply, and quote posts may chain text-only follow-ups; each post is
+ * published as a reply to the previous returned status, and a partial
+ * failure resumes at the failed post on retry (scheduled posts cannot
+ * chain).
  * Edits PUT the same body shape the web client sends, keep the original
  * visibility, and never touch polls (callers only offer edit on poll-less
  * posts).
@@ -173,6 +184,16 @@ fun ComposeScreen(
     var cwOn by rememberSaveable { mutableStateOf(false) }
     var spoiler by rememberSaveable { mutableStateOf("") }
     var markSensitive by rememberSaveable { mutableStateOf(false) }
+    /** Device-language fallback until the server preference (or a draft) loads. */
+    val fallbackLanguage = remember(Locale.getDefault()) {
+        Locale.getDefault().language.takeIf { it.isNotBlank() } ?: "en"
+    }
+    var language by rememberSaveable {
+        mutableStateOf(editing?.language?.takeIf { it.isNotBlank() } ?: fallbackLanguage)
+    }
+    // True while `language` is still the automatic default; a draft or a
+    // user pick clears it so the preference response cannot overwrite.
+    var languageAuto by rememberSaveable { mutableStateOf(editing?.language.isNullOrBlank()) }
     var visibility by rememberSaveable {
         mutableStateOf(
             editing?.visibility
@@ -181,6 +202,15 @@ fun ComposeScreen(
         )
     }
     val media = rememberSaveable(saver = MediaStateSaver) { mutableStateListOf<DraftMedia>() }
+    // Thread follow-ups (text only). The key is each segment's Idempotency-Key;
+    // rootKey does the same for the first post.
+    val chain = rememberSaveable(saver = ChainStateSaver) { mutableStateListOf<ChainSegment>() }
+    var rootKey by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
+    /** Posts already published in this thread, root included; >0 means partial. */
+    var postedCount by rememberSaveable { mutableIntStateOf(0) }
+    /** Parent of the next chain segment (id of the last published post). */
+    var chainParentId by rememberSaveable { mutableStateOf("") }
+    var chainFailure by rememberSaveable { mutableStateOf<String?>(null) }
     var pollOn by rememberSaveable { mutableStateOf(false) }
     var pollOptions by rememberSaveable { mutableStateOf(listOf("", "")) }
     var pollMultiple by rememberSaveable { mutableStateOf(false) }
@@ -197,6 +227,8 @@ fun ComposeScreen(
     var altDialogKey by rememberSaveable { mutableStateOf<String?>(null) }
     var closePrompt by rememberSaveable { mutableStateOf(false) }
     var draftReady by rememberSaveable { mutableStateOf(false) }
+    var emojiPickerOpen by rememberSaveable { mutableStateOf(false) }
+    var autocompleteState by remember { mutableStateOf<AutocompleteState>(AutocompleteState.Idle) }
     // Snapshot of the opening state, to tell whether a reply/edit has unsaved work.
     var baseline by rememberSaveable { mutableStateOf("") }
     val uploadJobs = remember { mutableMapOf<String, Job>() }
@@ -227,6 +259,10 @@ fun ComposeScreen(
             visibility = visibility,
             scheduleOn = scheduleOn,
             scheduleAtMs = scheduleAtMs,
+            // A late-arriving server default is not a user edit. Only an
+            // explicit language choice participates in the discard check.
+            language = if (languageAuto) "" else language,
+            chain = chain.map { it.value.text },
         )
 
     // ---- Initial content: edit source, reply mentions, or saved draft ----
@@ -252,7 +288,9 @@ fun ComposeScreen(
                 setTextAtEnd(restored)
                 spoiler = status.spoiler_text
                 cwOn = status.spoiler_text.isNotBlank()
-                markSensitive = status.sensitive && status.spoiler_text.isBlank()
+                // Keep the original sensitive flag; a text-only sensitive
+                // post must not come back unflagged.
+                markSensitive = status.sensitive
                 media.addAll(status.media_attachments.map { DraftMedia(key = it.id, attachment = it) })
             }
             ComposeMode.Reply -> {
@@ -275,7 +313,31 @@ fun ComposeScreen(
                 setTextAtEnd(draft.text)
                 cwOn = draft.cw
                 spoiler = draft.spoiler
+                markSensitive = draft.markSensitive
                 visibility = draft.visibility
+                if (draft.language.isNotBlank()) {
+                    language = draft.language
+                    languageAuto = false
+                }
+                chain.clear()
+                chain.addAll(
+                    draft.chain.map {
+                        ChainSegment(
+                            it.key.ifBlank { UUID.randomUUID().toString() },
+                            TextFieldValue(it.text, selection = TextRange(it.text.length)),
+                        )
+                    },
+                )
+                if (draft.rootKey.isNotBlank()) rootKey = draft.rootKey
+                // Only resume a partial thread when the parent post id
+                // survived; otherwise the chain would have no anchor.
+                if (draft.postedCount > 0 && draft.chainParentId.isNotBlank()) {
+                    postedCount = draft.postedCount
+                    chainParentId = draft.chainParentId
+                } else {
+                    postedCount = 0
+                    chainParentId = ""
+                }
                 pollOn = draft.pollOn
                 pollOptions = draft.pollOptions.ifEmpty { listOf("", "") }
                 pollMultiple = draft.pollMultiple
@@ -287,6 +349,14 @@ fun ComposeScreen(
         }
         baseline = fingerprint()
         draftReady = true
+    }
+
+    // Server posting-language preference. Best-effort: a missing endpoint
+    // or offline moment leaves the device-language fallback in place, and a
+    // draft or an explicit pick always wins.
+    LaunchedEffect(api, session.id, draftReady, languageAuto, mode) {
+        if (!draftReady || !languageAuto || mode == ComposeMode.Edit) return@LaunchedEffect
+        fetchDefaultPostLanguage(api)?.let { pref -> if (languageAuto) language = pref }
     }
 
     // Focus the text box and raise the keyboard as soon as content is in place.
@@ -302,6 +372,7 @@ fun ComposeScreen(
     // Alt text lives inside the attachments, so the debounced save must
     // also fire when only a description changed.
     val keyMediaAlt = media.joinToString("\u0000") { (it.attachment?.id ?: "") + ":" + (it.attachment?.description ?: "") }
+    val keyChain = chain.joinToString("\u0001") { it.key + "\u0002" + it.value.text }
     suspend fun saveDraftNow() {
         draftStore.save(
             session.id,
@@ -309,7 +380,11 @@ fun ComposeScreen(
                 text = text,
                 cw = cwOn,
                 spoiler = spoiler,
+                markSensitive = markSensitive,
                 visibility = visibility,
+                // An automatic default is not a user choice: leave it blank
+                // so the server preference can still apply on restore.
+                language = if (languageAuto) "" else language,
                 media = media.mapNotNull { item -> item.attachment?.let { DraftMediaRef(it) } },
                 pollOn = pollOn,
                 pollOptions = pollOptions.toList(),
@@ -318,14 +393,19 @@ fun ComposeScreen(
                 scheduleOn = scheduleOn,
                 scheduledAtMs = scheduleAtMs,
                 savedAt = System.currentTimeMillis(),
+                rootKey = rootKey,
+                chain = chain.map { DraftChainSegment(it.key, it.value.text) },
+                postedCount = postedCount,
+                chainParentId = chainParentId,
             ),
         )
     }
-    val composerEmpty = text.isBlank() && spoiler.isBlank() && media.isEmpty() && !pollOn
+    val composerEmpty = text.isBlank() && spoiler.isBlank() && media.isEmpty() && !pollOn && !markSensitive &&
+        chain.isEmpty() && postedCount == 0
     LaunchedEffect(
-        draftReady, text, cwOn, spoiler, visibility,
+        draftReady, text, cwOn, spoiler, markSensitive, visibility, language,
         pollOn, pollMultiple, pollExpiry, keyPollOptions,
-        scheduleOn, scheduleAtMs,
+        scheduleOn, scheduleAtMs, keyChain, postedCount, chainParentId,
         media.size, media.count { it.attachment != null }, keyMediaAlt,
     ) {
         if (!draftReady || mode != ComposeMode.New || posting) return@LaunchedEffect
@@ -335,6 +415,54 @@ fun ComposeScreen(
         }
         delay(600)
         saveDraftNow()
+    }
+
+    // ---- @mention / #hashtag autocomplete (post text field only) -------
+    // The effect restarts (and cancels the in-flight search) whenever the
+    // text or caret changes, so a response can never overwrite newer input;
+    // the token is re-checked after the await as a second guard.
+    LaunchedEffect(body, draftReady, mode, posting, postedCount) {
+        if (!draftReady || posting || postedCount > 0) {
+            autocompleteState = AutocompleteState.Idle
+            return@LaunchedEffect
+        }
+        val token = autocompleteToken(body.text, body.selection.end)
+        if (token == null) {
+            autocompleteState = AutocompleteState.Idle
+            return@LaunchedEffect
+        }
+        autocompleteState = AutocompleteState.Loading
+        delay(300)
+        val results = try {
+            SearchRepository.search(
+                api = api,
+                query = if (token.type == "accounts") "@${token.query}" else token.query,
+                type = token.type,
+                limit = AUTOCOMPLETE_LIMIT,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ApiError) {
+            autocompleteState = AutocompleteState.Error("Could not load suggestions (server error ${e.status}). Keep typing.")
+            return@LaunchedEffect
+        } catch (e: Exception) {
+            autocompleteState = AutocompleteState.Error("Could not load suggestions. Keep typing.")
+            return@LaunchedEffect
+        }
+        if (autocompleteToken(body.text, body.selection.end) != token) return@LaunchedEffect
+        val accounts = results.accounts.take(AUTOCOMPLETE_LIMIT)
+        val hashtags = results.hashtags.take(AUTOCOMPLETE_LIMIT)
+        autocompleteState = if (accounts.isEmpty() && hashtags.isEmpty()) {
+            AutocompleteState.Empty(token)
+        } else {
+            AutocompleteState.Content(token, accounts, hashtags)
+        }
+    }
+
+    fun applyAutocomplete(token: AutocompleteToken, snippet: String) {
+        val insertion = insertAtSelection(body.text, token.start, token.end, snippet)
+        body = TextFieldValue(insertion.text, selection = TextRange(insertion.cursor))
+        autocompleteState = AutocompleteState.Idle
     }
 
     fun showError(message: String) {
@@ -425,31 +553,45 @@ fun ComposeScreen(
     }
 
     // ---- Validation ----
-    // In quote mode the appended `RE:` line counts against the limit:
-    // the url counts as characters_reserved_per_url (25 here), plus
-    // `RE: ` and the blank line.
-    val quoteOverhead = if (mode == ComposeMode.Quote) QUOTE_OVERHEAD else 0
-    val used = text.codePointCount(0, text.length) + quoteOverhead +
-        if (cwOn) spoiler.codePointCount(0, spoiler.length) else 0
+    // Every URL counts as characters_reserved_per_url (25 here), not its
+    // raw length; quote mode also counts the appended `RE:` line.
+    val quotedUrl = if (mode == ComposeMode.Quote) quoting?.let { it.url ?: it.uri } else null
+    val used = composerUsed(text, spoiler, cwOn, quotedUrl)
     val overLimit = used > CHAR_LIMIT
     val readyItems = media.filter { it.attachment != null }
     val missingAlt = readyItems.count { it.attachment?.description.isNullOrBlank() }
-    val pollInvalid = pollOn && (pollOptions.count { it.isNotBlank() } < 2 || pollOptions.any { it.length > POLL_OPTION_LIMIT })
-    val scheduleIncomplete = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs == 0L
-    val hasContent = text.isNotBlank() || media.isNotEmpty()
+    val pollInvalid = pollBlocksPosting(pollOn, pollOptions)
+    val scheduleIncomplete = mode != ComposeMode.Edit && scheduleOn &&
+        !ScheduleDates.isFutureEnough(scheduleAtMs, System.currentTimeMillis())
+    val chainTexts = chain.map { it.value.text }
+    // Each segment carries the same content warning, so it counts per post.
+    val chainInvalid = !chainValid(chainTexts, cwOn, spoiler)
+    // Scheduling a thread is out of scope: the toggle is disabled while a
+    // chain exists and the chain controls are hidden while scheduling.
+    val chainScheduleConflict = scheduleOn && chain.isNotEmpty()
+    val hasContent = text.isNotBlank() || media.isNotEmpty() || pollOn
     // A bare link is a boost with extra steps: quote mode needs commentary.
     val commentaryPresent = mode != ComposeMode.Quote || text.isNotBlank()
     val dirty = draftReady && fingerprint() != baseline
     // GoToSocial answers an edit that changes nothing with HTTP 422, so
     // Save stays disabled until the edit actually differs.
     val canPost = draftReady && !posting && hasContent && commentaryPresent && !overLimit && !pollInvalid && !scheduleIncomplete &&
+        !chainInvalid && !chainScheduleConflict &&
         media.none { it.error != null } && (mode != ComposeMode.Edit || dirty)
 
     fun submit() {
+        val scheduling = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs > 0
+        if (scheduling && !ScheduleDates.isFutureEnough(scheduleAtMs, System.currentTimeMillis())) {
+            scheduleError = "Scheduled posts must be at least 5 minutes in the future. Pick a later time."
+            schedulePickerStep = 1
+            return
+        }
         posting = true
         pendingAltConfirm = false
-        val scheduling = mode != ComposeMode.Edit && scheduleOn && scheduleAtMs > 0
         scope.launch {
+            // -1 = the root post (or an edit/schedule); >= 0 names the chain
+            // segment that failed, so retry can resume there.
+            var failedAt = -1
             try {
                 // Wait for in-flight uploads before building the request.
                 media.mapNotNull { uploadDeferreds[it.key] }.forEach { it.await() }
@@ -471,7 +613,13 @@ fun ComposeScreen(
                 } else {
                     current.mapNotNull { it.attachment?.id }
                 }
-                val sensitive = (cwOn && spoiler.isNotBlank()) || (markSensitive && current.isNotEmpty())
+                val sensitive = submittedSensitive(
+                    cwOn = cwOn,
+                    spoiler = spoiler,
+                    markSensitive = markSensitive,
+                    hasMedia = current.isNotEmpty(),
+                    isEdit = mode == ComposeMode.Edit,
+                )
                 // Quote mode appends the RE line server-side text: the
                 // field holds only the commentary.
                 val statusText = if (mode == ComposeMode.Quote && quoting != null) {
@@ -479,12 +627,16 @@ fun ComposeScreen(
                 } else {
                     text
                 }
+                // Every thread post shares these fields.
+                val contentType = editing?.content_type ?: "text/markdown"
+                val spoilerText = if (cwOn) spoiler else ""
                 val payload: JsonObject = buildJsonObject {
                     put("status", statusText)
-                    put("content_type", editing?.content_type ?: "text/markdown")
+                    put("content_type", contentType)
                     put("visibility", visibility)
-                    put("spoiler_text", if (cwOn) spoiler else "")
+                    put("spoiler_text", spoilerText)
                     put("sensitive", sensitive)
+                    if (language.isNotBlank()) put("language", language)
                     if (replyTo != null && mode == ComposeMode.Reply) put("in_reply_to_id", replyTo.id)
                     // Edits always send the list: it is the set of attachments to KEEP.
                     if (current.isNotEmpty() || mode == ComposeMode.Edit) {
@@ -531,7 +683,7 @@ fun ComposeScreen(
                         serializer = ScheduledStatus.serializer(),
                         method = "POST",
                         body = payload,
-                        headers = mapOf("Idempotency-Key" to UUID.randomUUID().toString()),
+                        headers = mapOf("Idempotency-Key" to rootKey),
                     )
                     if (mode == ComposeMode.New) draftStore.clear(session.id)
                     keyboard?.hide()
@@ -541,35 +693,108 @@ fun ComposeScreen(
                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     onDismiss()
                 } else {
-                    val posted = api.request(
-                        path = "/api/v1/statuses",
-                        serializer = Status.serializer(),
-                        method = "POST",
-                        body = payload,
-                        headers = mapOf("Idempotency-Key" to UUID.randomUUID().toString()),
-                    )
-                    TimelineStore.applyPosted(session.id, posted)
+                    // Root post, then each text-only segment as a reply to the
+                    // previous returned status. postedCount survives a partial
+                    // failure (and the draft), so a retry never reposts a post
+                    // that already succeeded.
+                    var lastPosted: Status? = null
+                    if (postedCount == 0) {
+                        failedAt = -1
+                        val root = api.request(
+                            path = "/api/v1/statuses",
+                            serializer = Status.serializer(),
+                            method = "POST",
+                            body = payload,
+                            // Stable across retries: a re-sent root dedupes server-side.
+                            headers = mapOf("Idempotency-Key" to rootKey),
+                        )
+                        TimelineStore.applyPosted(session.id, root)
+                        lastPosted = root
+                        postedCount = 1
+                        chainParentId = root.id
+                        // Persist each successful step while publishing. A
+                        // process death must resume after this root, not
+                        // replay it with only the pre-submit draft state.
+                        if (mode == ComposeMode.New) saveDraftNow()
+                    } else if (chainParentId.isBlank()) {
+                        showError("This thread's progress was lost. Discard the draft and start the thread again.")
+                        return@launch
+                    }
+                    var index = chainResumeIndex(postedCount)
+                    while (index < chain.size) {
+                        val segment = chain[index]
+                        failedAt = index
+                        val replyBody: JsonObject = buildJsonObject {
+                            put("status", segment.value.text)
+                            put("content_type", contentType)
+                            put("visibility", visibility)
+                            put("spoiler_text", spoilerText)
+                            put("sensitive", sensitive)
+                            if (language.isNotBlank()) put("language", language)
+                            put("in_reply_to_id", chainParentId)
+                        }
+                        val segmentStatus = api.request(
+                            path = "/api/v1/statuses",
+                            serializer = Status.serializer(),
+                            method = "POST",
+                            body = replyBody,
+                            // The segment key is reused by a retry of this segment.
+                            headers = mapOf("Idempotency-Key" to segment.key),
+                        )
+                        TimelineStore.applyPosted(session.id, segmentStatus)
+                        lastPosted = segmentStatus
+                        postedCount = index + 2
+                        chainParentId = segmentStatus.id
+                        if (mode == ComposeMode.New) saveDraftNow()
+                        index += 1
+                    }
+                    chainFailure = null
+                    // The whole chain published: clear before navigating so
+                    // reopening never resurrects it.
+                    if (mode == ComposeMode.New) draftStore.clear(session.id)
                     keyboard?.hide()
-                    onPosted(posted)
+                    val finished = lastPosted
+                    if (finished != null) {
+                        onPosted(finished)
+                    } else {
+                        // Restored after every post had already succeeded;
+                        // nothing left to publish.
+                        onDismiss()
+                    }
                 }
-                if (mode == ComposeMode.New && !scheduling) draftStore.clear(session.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiError) {
-                val what = when {
-                    mode == ComposeMode.Edit -> "Saving your edit"
-                    scheduling -> "Scheduling"
-                    else -> "Posting"
-                }
                 val reason = serverReason(e)?.let { ": $it" } ?: " (server error ${e.status})"
-                showError("$what failed$reason. Nothing was lost; try again.")
-            } catch (e: Exception) {
-                val what = when {
-                    mode == ComposeMode.Edit -> "Saving your edit"
-                    scheduling -> "Scheduling"
-                    else -> "Posting"
+                if (failedAt >= 0) {
+                    val what = chainPostLabel(failedAt)
+                    chainFailure = "$what did not publish$reason. Retry continues from that post."
+                    // Persist the partial thread immediately; the debounced
+                    // save may not observe postedCount while posting is true.
+                    if (mode == ComposeMode.New) saveDraftNow()
+                    showError("$what failed. Retry to continue the thread.")
+                } else {
+                    val what = when {
+                        mode == ComposeMode.Edit -> "Saving your edit"
+                        scheduling -> "Scheduling"
+                        else -> "Posting"
+                    }
+                    showError("$what failed$reason. Nothing was lost; try again.")
                 }
-                showError("$what failed: ${e.message ?: "no connection"}. Nothing was lost; try again.")
+            } catch (e: Exception) {
+                if (failedAt >= 0) {
+                    val what = chainPostLabel(failedAt)
+                    chainFailure = "$what did not publish: ${e.message ?: "no connection"}. Retry continues from that post."
+                    if (mode == ComposeMode.New) saveDraftNow()
+                    showError("$what failed. Retry to continue the thread.")
+                } else {
+                    val what = when {
+                        mode == ComposeMode.Edit -> "Saving your edit"
+                        scheduling -> "Scheduling"
+                        else -> "Posting"
+                    }
+                    showError("$what failed: ${e.message ?: "no connection"}. Nothing was lost; try again.")
+                }
             } finally {
                 posting = false
             }
@@ -604,11 +829,11 @@ fun ComposeScreen(
         ComposeMode.Quote -> "Quote post"
         ComposeMode.New -> "New post"
     }
-    val actionLabel = when (mode) {
-        ComposeMode.Edit -> "Save"
-        ComposeMode.Reply -> "Reply"
-        ComposeMode.Quote -> "Post"
-        ComposeMode.New -> "Post"
+    val actionLabel = when {
+        mode == ComposeMode.Edit -> "Save"
+        chainFailure != null -> "Retry"
+        mode == ComposeMode.Reply -> "Reply"
+        else -> "Post"
     }
 
     Scaffold(
@@ -648,23 +873,28 @@ fun ComposeScreen(
         },
         bottomBar = {
             ComposeToolbar(
-                canAddMedia = !pollOn && media.size < MAX_MEDIA && !posting,
+                canAddMedia = !pollOn && media.size < MAX_MEDIA && !posting && postedCount == 0,
                 onAddMedia = {
                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
+                emojiEnabled = !posting && postedCount == 0,
+                onOpenEmoji = { emojiPickerOpen = true },
                 pollOn = pollOn,
-                pollEnabled = media.isEmpty() && mode != ComposeMode.Edit && !posting,
+                pollEnabled = media.isEmpty() && mode != ComposeMode.Edit && !posting && postedCount == 0,
                 onTogglePoll = { pollOn = !pollOn },
                 cwOn = cwOn,
                 onToggleCw = { cwOn = !cwOn },
                 scheduleOn = scheduleOn,
                 onToggleSchedule = {
-                    scheduleOn = !scheduleOn
-                    scheduleError = null
-                    if (scheduleOn) schedulePickerStep = 1
+                    if (chain.isEmpty() && postedCount == 0) {
+                        scheduleOn = !scheduleOn
+                        scheduleError = null
+                        if (scheduleOn) schedulePickerStep = 1
+                    }
                 },
-                scheduleEnabled = mode != ComposeMode.Edit && !posting,
+                scheduleEnabled = mode != ComposeMode.Edit && !posting && chain.isEmpty() && postedCount == 0,
                 hasMedia = media.isNotEmpty(),
+                editing = mode == ComposeMode.Edit,
                 sensitive = markSensitive || (cwOn && spoiler.isNotBlank()),
                 onToggleSensitive = { markSensitive = !markSensitive },
                 used = used,
@@ -693,6 +923,14 @@ fun ComposeScreen(
                     ComposeMode.Reply -> replyTo?.visibility
                     ComposeMode.Quote -> quoting?.visibility
                     else -> null
+                },
+            )
+
+            LanguageSelector(
+                language = language,
+                onLanguageChange = {
+                    language = it
+                    languageAuto = false
                 },
             )
 
@@ -740,6 +978,16 @@ fun ComposeScreen(
                         ) { Text("Clear") }
                     }
                 }
+                // Scheduling a chain is out of scope; say so instead of
+                // silently dropping the thread posts.
+                Text(
+                    "Threads cannot be scheduled. Turn scheduling off to add posts to a thread.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "Threads cannot be scheduled. Turn scheduling off to add posts to a thread." },
+                )
             }
 
             if (cwOn) {
@@ -758,9 +1006,21 @@ fun ComposeScreen(
                 )
             }
 
+            if (postedCount > 0) {
+                Text(
+                    "Post 1 is already published. Retry continues with the remaining posts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "Post 1 is already published. Retry continues with the remaining posts." },
+                )
+            }
+
             TextField(
                 value = body,
                 onValueChange = { body = it },
+                readOnly = postedCount > 0,
                 placeholder = {
                     Text(
                         when (mode) {
@@ -782,6 +1042,16 @@ fun ComposeScreen(
                     .semantics { contentDescription = "Post text. Markdown is supported." },
             )
 
+            AutocompleteSuggestions(
+                state = autocompleteState,
+                onPickAccount = { token, account ->
+                    applyAutocomplete(token, autocompleteSnippet("accounts", autocompleteValue(account.acct)))
+                },
+                onPickHashtag = { token, hashtag ->
+                    applyAutocomplete(token, autocompleteSnippet("hashtags", autocompleteValue(hashtag.name)))
+                },
+            )
+
             if (overLimit) {
                 Text(
                     "This post is ${used - CHAR_LIMIT} characters over the $CHAR_LIMIT-character limit.",
@@ -794,13 +1064,56 @@ fun ComposeScreen(
             if (media.isNotEmpty()) {
                 MediaStrip(
                     media = media,
-                    onRemove = { removeMedia(it) },
-                    onRetry = { uploadItem(it) },
-                    onEditAlt = { altDialogKey = it.key },
+                    onRemove = {
+                        if (postedCount > 0) {
+                            showError("Post 1 is already published; its attachments can't change here.")
+                        } else {
+                            removeMedia(it)
+                        }
+                    },
+                    onRetry = { if (postedCount == 0) uploadItem(it) },
+                    onEditAlt = {
+                        if (postedCount > 0) {
+                            showError("Post 1 is already published; its descriptions can't change here.")
+                        } else {
+                            altDialogKey = it.key
+                        }
+                    },
                 )
             }
 
-            if (pollOn) {
+            if (mode != ComposeMode.Edit && !scheduleOn) {
+                ChainEditor(
+                    segments = chain,
+                    postedCount = postedCount,
+                    enabled = !posting,
+                    cwOn = cwOn,
+                    spoiler = spoiler,
+                    failure = chainFailure,
+                    onTextChange = { index, value ->
+                        if (index in chain.indices) chain[index] = chain[index].copy(value = value)
+                    },
+                    onAdd = {
+                        if (chain.size < MAX_CHAIN_SEGMENTS) {
+                            chain.add(ChainSegment(UUID.randomUUID().toString(), TextFieldValue("")))
+                        }
+                    },
+                    onRemove = { index ->
+                        if (index in chain.indices && !chainSegmentPosted(index, postedCount)) chain.removeAt(index)
+                    },
+                )
+            }
+
+            if (pollOn && postedCount > 0) {
+                Text(
+                    "The poll is already part of Post 1.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .semantics { contentDescription = "The poll is already part of Post 1." },
+                )
+            } else if (pollOn) {
                 PollEditor(
                     options = pollOptions,
                     onOptionChange = { index, value -> pollOptions = pollOptions.mapIndexed { i, option -> if (i == index) value else option } },
@@ -828,9 +1141,11 @@ fun ComposeScreen(
     if (schedulePickerStep == 1) {
         val dateState = rememberDatePickerState(
             initialSelectedDateMillis = when {
+                // Already a DatePicker value.
                 scheduleDateMs > 0 -> scheduleDateMs
-                scheduleAtMs > 0 -> scheduleAtMs
-                else -> System.currentTimeMillis() + 3_600_000L
+                // A real instant: seed the picker with that local day.
+                scheduleAtMs > 0 -> ScheduleDates.pickerSeed(scheduleAtMs, ZoneId.systemDefault())
+                else -> ScheduleDates.pickerSeed(System.currentTimeMillis() + 3_600_000L, ZoneId.systemDefault())
             },
         )
         DatePickerDialog(
@@ -854,12 +1169,9 @@ fun ComposeScreen(
         }
     }
     if (schedulePickerStep == 2 && scheduleDateMs > 0) {
-        // DatePicker returns UTC-midnight millis for the picked calendar date;
-        // derive the date in UTC so the calendar day survives any timezone.
-        val pickedDate = Instant.ofEpochMilli(scheduleDateMs).atZone(ZoneId.of("UTC")).toLocalDate()
         val priorTime = if (scheduleError == null && scheduleAtMs > 0) {
             // scheduleAtMs is a validated real instant; show its wall-clock in
-            // the user's zone. UTC extraction is only for raw DatePicker millis.
+            // the user's zone.
             Instant.ofEpochMilli(scheduleAtMs).atZone(ZoneId.systemDefault()).toLocalTime()
         } else {
             null
@@ -876,12 +1188,13 @@ fun ComposeScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val candidate = pickedDate
-                            .atTime(timeState.hour, timeState.minute)
-                            .atZone(ZoneId.systemDefault())
-                            .toInstant()
-                            .toEpochMilli()
-                        if (candidate >= System.currentTimeMillis() + 5 * 60_000L) {
+                        val candidate = ScheduleDates.localInstant(
+                            pickerMillis = scheduleDateMs,
+                            hour = timeState.hour,
+                            minute = timeState.minute,
+                            zone = ZoneId.systemDefault(),
+                        )
+                        if (ScheduleDates.isFutureEnough(candidate, System.currentTimeMillis())) {
                             scheduleAtMs = candidate
                             scheduleError = null
                             schedulePickerStep = 0
@@ -1032,6 +1345,19 @@ fun ComposeScreen(
                 } else {
                     TextButton(onClick = { closePrompt = false }) { Text("Keep editing") }
                 }
+            },
+        )
+    }
+
+    if (emojiPickerOpen) {
+        EmojiPickerSheet(
+            api = api,
+            session = session,
+            onDismiss = { emojiPickerOpen = false },
+            onPick = { emoji ->
+                val insertion = insertAtSelection(body.text, body.selection.start, body.selection.end, ":${emoji.shortcode}: ")
+                body = TextFieldValue(insertion.text, selection = TextRange(insertion.cursor))
+                emojiPickerOpen = false
             },
         )
     }
